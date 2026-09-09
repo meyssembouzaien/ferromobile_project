@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: crc_covlib
+Version: 4.6.1
+Summary: Software library for radiowave coverage and interference prediction
+License: see crc_covlib/LICENSE.txt
+Project-URL: Homepage, https://github.com/ic-crc/crc-covlib
+Project-URL: Repository, https://github.com/ic-crc/crc-covlib.git
+Keywords: propagation,pathloss,coverage,interference,radio,frequency,RF,radiofrequency,radiowave,prediction,Longley-Rice,ITM,P.1812,P.452,eHata
+Classifier: Operating System :: Microsoft :: Windows
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Topic :: Scientific/Engineering
+Classifier: Intended Audience :: Telecommunications Industry
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.9

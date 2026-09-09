@@ -1,0 +1,29 @@
+# Environnement virtuel
+venv/
+__pycache__/
+*.pyc
+
+# Données brutes lourdes — restent sur Drive, pas dans Git
+data/raw/terrain/
+data/raw/landcover/
+
+# Cache API externe, gros et régénérable, pas essentiel à la reproductibilité
+datapreparation/arcep_cache/
+
+# Données d'exemple de la bibliothèque crc-covlib (pas tes données)
+crc-covlib/data/
+crc_covlib/data/
+
+# Anciens essais/prototypes, pas utilisés par placement/ — 5.2 Go, hors Git
+ferromobile_test/
+
+# Logs RL générés à l'entraînement
+data/processed/dataset_enrichi_rl/
+
+# Cache local (régénérable)
+data/cache/
+data/raw/*.json
+
+# Divers
+.DS_Store
+*.log
