@@ -200,6 +200,13 @@ def main():
     points_hors_tunnel = set(df_points[~df_points["in_tunnel"]]["point_id"])
     n_total = len(points_hors_tunnel)
 
+    # Météo du MÊME scénario que le réseau réel comparé (df_enrichi déjà
+    # filtré sur SCENARIO ci-dessus) — cohérence indispensable : voir
+    # correction du 2025-xx dans simulateur_deploiement.py, sans ça une
+    # cellule hypothétique échappait à la dégradation pluie que subit le
+    # réseau réel, faussant systématiquement U(I)/r_t/r_fin en faveur du RL.
+    df_meteo_scenario = df_enrichi[["point_id", "pluie_mm_h"]].drop_duplicates("point_id")
+
     # ================================================================
     # 2. GRILLE — construite depuis dataset_base.csv, PAS GrilleCorridor()
     #    à vide (le constructeur exige points_trajet_lat_lon).
@@ -238,7 +245,7 @@ def main():
     # ================================================================
     # 6. SIMULATION DU DÉPLOIEMENT
     # ================================================================
-    resultats_simulateur = simuler_deploiement(lat_test, lon_test, GENERATION_TEST, BANDE_TEST, df_points)
+    resultats_simulateur = simuler_deploiement(lat_test, lon_test, GENERATION_TEST, BANDE_TEST, df_points, df_meteo_scenario)
     # simuler_deploiement() exclut déjà les tunnels en interne (in_tunnel
     # -> continue) ; ce filtre est donc redondant mais laissé par sécurité,
     # au cas où l'implémentation du simulateur changerait plus tard.

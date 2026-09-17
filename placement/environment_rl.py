@@ -170,9 +170,10 @@ class FerroMobileEnv:
 
         if self._reset_appele:
             self.episode_id += 1
-        df_meteo = (self.df_enrichi_complet[self.df_enrichi_complet["scenario_id"] == self.scenario]
-                    [["point_id", "pluie_mm_h", "temp_c"]].drop_duplicates("point_id"))
-        self.canaux_statiques = construire_canaux_statiques(self.grille, self.df_points, df_meteo)
+        self.df_meteo_scenario = (
+            self.df_enrichi_complet[self.df_enrichi_complet["scenario_id"] == self.scenario]
+            [["point_id", "pluie_mm_h", "temp_c"]].drop_duplicates("point_id"))
+        self.canaux_statiques = construire_canaux_statiques(self.grille, self.df_points, self.df_meteo_scenario)
 
         df_scenario = self.df_enrichi_complet[self.df_enrichi_complet["scenario_id"] == self.scenario]
         self.df_reel = df_scenario[(~df_scenario["in_tunnel"]) & (df_scenario["ant_id"].notna())]
@@ -432,7 +433,7 @@ class FerroMobileEnv:
         ix, iy, g, f = action
         lat, lon = self.grille.cellule_vers_gps(ix, iy)
 
-        resultats_sim = simuler_deploiement(lat, lon, g, f, self.df_points)
+        resultats_sim = simuler_deploiement(lat, lon, g, f, self.df_points, self.df_meteo_scenario)
         resultats_sim = [r for r in resultats_sim if r["point_id"] in self.points_hors_tunnel]
 
         cout = get_total_cost((ix, iy), g, f, self.sites_deja_presents)
