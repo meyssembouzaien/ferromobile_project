@@ -19,9 +19,13 @@ import torch.nn as nn
 from dqn_model import FerroMobileDQN
 from replay_buffer import ReplayBuffer
 
+CE_FICHIER = os.path.dirname(os.path.abspath(__file__))    # .../placement
+RACINE_PROJET = os.path.dirname(CE_FICHIER)                 # .../ferromobile_project
+DOSSIER_CHECKPOINTS = os.path.join(RACINE_PROJET, "checkpoints")
+
 # Hyperparamètres du smoke test — à ajuster une fois le pipeline validé.
 T_MAX_SMOKE_TEST = 20
-N_EPISODES_SMOKE_TEST = 10
+N_EPISODES_SMOKE_TEST = 250
 BATCH_SIZE = 32
 GAMMA = 0.99
 LR = 1e-4
@@ -30,6 +34,7 @@ EPSILON_FIN = 0.05
 EPSILON_DECROISSANCE = 0.9  # multiplié à chaque fin d'épisode
 CAPACITE_BUFFER = 500
 MAJ_CIBLE_TOUS_LES_N_STEPS = 20
+SAUVER_TOUS_LES_N_EPISODES = 25  # checkpoint disque
 
 
 def etat_vers_tenseurs(etat, device):
@@ -141,10 +146,24 @@ def verifier_integration(env, modele, device):
     print(f"verifier_integration : OK (|A|={reel}, Q shape={tuple(q.shape)})")
 
 
+def sauver_checkpoint(modele, optimiseur, episode, epsilon, total_steps):
+    os.makedirs(DOSSIER_CHECKPOINTS, exist_ok=True)
+    chemin = os.path.join(DOSSIER_CHECKPOINTS, f"checkpoint_ep{episode}.pt")
+    torch.save({
+        "modele": modele.state_dict(),
+        "optimiseur": optimiseur.state_dict(),
+        "episode": episode,
+        "epsilon": epsilon,
+        "total_steps": total_steps,
+    }, chemin)
+    print(f"  checkpoint sauvegardé : {chemin}")
+
+
 def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
                           n_episodes, t_max, batch_size, gamma,
                           epsilon_debut, epsilon_fin, epsilon_decroissance,
-                          maj_cible_tous_les_n_steps):
+                          maj_cible_tous_les_n_steps,
+                          sauver_tous_les_n_episodes=SAUVER_TOUS_LES_N_EPISODES):
     epsilon = epsilon_debut
     total_steps = 0
     debut_total = time.time()
@@ -209,8 +228,12 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
               f"epsilon={epsilon:.3f}, durée={duree_episode:.1f}s, "
               f"fin={raison_fin}{detail}")
 
+        if (episode + 1) % sauver_tous_les_n_episodes == 0:
+            sauver_checkpoint(modele, optimiseur, episode + 1, epsilon, total_steps)
+
     duree_totale = time.time() - debut_total
     print(f"\nDurée totale : {duree_totale:.1f}s ({duree_totale / n_episodes:.1f}s/épisode en moyenne)")
+    sauver_checkpoint(modele, optimiseur, n_episodes, epsilon, total_steps)  # checkpoint final, toujours
 
 
 def preparer_environnement_colab():
@@ -218,14 +241,11 @@ def preparer_environnement_colab():
     modules importés (mais pas les fichiers sur disque). Cette fonction
     remet CRC_COVLIB_PATH et vérifie le DEM, pour ne plus avoir à
     relancer les cellules de setup à la main à chaque redémarrage."""
-    ce_fichier = os.path.dirname(os.path.abspath(__file__))  # .../placement
-    racine_projet = os.path.dirname(ce_fichier)               # .../ferromobile_project
-
     if "CRC_COVLIB_PATH" not in os.environ:
-        os.environ["CRC_COVLIB_PATH"] = os.path.join(racine_projet, "crc-covlib", "python-wrapper")
+        os.environ["CRC_COVLIB_PATH"] = os.path.join(RACINE_PROJET, "crc-covlib", "python-wrapper")
     print(f"CRC_COVLIB_PATH : {os.environ['CRC_COVLIB_PATH']}")
 
-    dem_path = os.path.join(racine_projet, "data", "raw", "terrain", "eu_dem_courpiere_ambert.tif")
+    dem_path = os.path.join(RACINE_PROJET, "data", "raw", "terrain", "eu_dem_courpiere_ambert.tif")
     if not os.path.exists(dem_path):
         raise RuntimeError(
             f"DEM introuvable : {dem_path}\n"
