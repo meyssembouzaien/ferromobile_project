@@ -9,6 +9,9 @@ Lancer sur Colab (nécessite dataset réel + crc-covlib) :
     python train_dqn.py
 """
 
+import os
+import time
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -144,8 +147,10 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
                           maj_cible_tous_les_n_steps):
     epsilon = epsilon_debut
     total_steps = 0
+    debut_total = time.time()
 
     for episode in range(n_episodes):
+        debut_episode = time.time()
         etat = env.reset()
         done = False
         t = 0
@@ -188,12 +193,51 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
 
         epsilon = max(epsilon_fin, epsilon * epsilon_decroissance)
         perte_moy = sum(pertes) / len(pertes) if pertes else float("nan")
+        duree_episode = time.time() - debut_episode
+
+        # _finaliser() (le seul chemin qui met done=True) renvoie r_fin/
+        # cout_total/n_white dans info — donc dès que done=True, ces clés
+        # existent. Si l'épisode s'arrête sans done=True (t_max externe
+        # atteint avant que l'env ne se termine lui-même), elles n'y sont pas.
+        raison_fin = "env_done" if done else "t_max_externe"
+        detail = ""
+        if "r_fin" in info:
+            detail = f", cout_total={info['cout_total']:.0f}€, n_white={info['n_white']}, r_fin={info['r_fin']:.4f}"
 
         print(f"épisode {episode+1}/{n_episodes} : {t} steps, "
-              f"reward total={reward_total:.4f}, perte moy={perte_moy:.4f}, epsilon={epsilon:.3f}")
+              f"reward total={reward_total:.4f}, perte moy={perte_moy:.4f}, "
+              f"epsilon={epsilon:.3f}, durée={duree_episode:.1f}s, "
+              f"fin={raison_fin}{detail}")
+
+    duree_totale = time.time() - debut_total
+    print(f"\nDurée totale : {duree_totale:.1f}s ({duree_totale / n_episodes:.1f}s/épisode en moyenne)")
+
+
+def preparer_environnement_colab():
+    """Un redémarrage de session Colab efface les variables d'env et les
+    modules importés (mais pas les fichiers sur disque). Cette fonction
+    remet CRC_COVLIB_PATH et vérifie le DEM, pour ne plus avoir à
+    relancer les cellules de setup à la main à chaque redémarrage."""
+    ce_fichier = os.path.dirname(os.path.abspath(__file__))  # .../placement
+    racine_projet = os.path.dirname(ce_fichier)               # .../ferromobile_project
+
+    if "CRC_COVLIB_PATH" not in os.environ:
+        os.environ["CRC_COVLIB_PATH"] = os.path.join(racine_projet, "crc-covlib", "python-wrapper")
+    print(f"CRC_COVLIB_PATH : {os.environ['CRC_COVLIB_PATH']}")
+
+    dem_path = os.path.join(racine_projet, "data", "raw", "terrain", "eu_dem_courpiere_ambert.tif")
+    if not os.path.exists(dem_path):
+        raise RuntimeError(
+            f"DEM introuvable : {dem_path}\n"
+            "Le symlink vers Drive a disparu (redémarrage complet du runtime, "
+            "pas juste de la session) — relance la cellule mkdir+ln -s du notebook."
+        )
+    print(f"DEM trouvé : {dem_path}")
 
 
 if __name__ == "__main__":
+    preparer_environnement_colab()  # avant l'import qui charge crc_covlib
+
     from environment_rl import FerroMobileEnv, BANDES_PAR_GENERATION
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
