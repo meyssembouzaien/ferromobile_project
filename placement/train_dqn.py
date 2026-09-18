@@ -25,13 +25,13 @@ DOSSIER_CHECKPOINTS = os.path.join(RACINE_PROJET, "checkpoints")
 
 # Hyperparamètres du smoke test — à ajuster une fois le pipeline validé.
 T_MAX_SMOKE_TEST = 20
-N_EPISODES_TRAIN = 250
+N_EPISODES_TRAIN = 1000
 BATCH_SIZE = 32
 GAMMA = 0.99
 LR = 1e-4
 EPSILON_DEBUT = 1.0
 EPSILON_FIN = 0.05
-EPSILON_DECROISSANCE = 0.9  # multiplié à chaque fin d'épisode
+EPSILON_DECROISSANCE = 0.997  # multiplié à chaque fin d'épisode — étalé sur 1000 épisodes
 CAPACITE_BUFFER = 500
 MAJ_CIBLE_TOUS_LES_N_STEPS = 20
 SAUVER_TOUS_LES_N_EPISODES = 25  # checkpoint disque
