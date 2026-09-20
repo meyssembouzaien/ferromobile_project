@@ -479,9 +479,17 @@ class FerroMobileEnv:
         cout_total = self.budget_total - self.budget_restant
 
         r_fin = compute_r_fin(
-            self._dernier_n_white, self._dernier_resultat_dp["qos_min"], cout_total,
-            self.budget_total, self.Q_critique, self.R_couverture, self.R_qualite,
-            self.R_succes, self.R_eff)
+    n_white=self._dernier_n_white,
+    n_total=self.n_total,
+    qos_min=self._dernier_resultat_dp["qos_min"],
+    cost_total=cout_total,
+    budget=self.budget_total,
+    Q_critique=self.Q_critique,
+    R_couverture=self.R_couverture,
+    R_qualite=self.R_qualite,
+    R_succes=self.R_succes,
+    R_eff=self.R_eff,
+)
 
         self.done = True
         return self._construire_etat(), r_t_dernier_step + r_fin, True, {
