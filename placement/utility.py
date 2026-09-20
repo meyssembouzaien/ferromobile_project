@@ -82,12 +82,26 @@ def compute_r_t(U_apres, U_avant):
     return U_apres - U_avant
 
 
-def compute_r_fin(n_white, qos_min, cost_total, budget,
+def compute_r_fin(n_white, n_total, qos_min, cost_total, budget,
                    Q_critique, R_couverture, R_qualite, R_succes, R_eff):
-    """r_fin, §14. Calculé une seule fois, à la fin de l'épisode
-    (STOP ou budget épuisé), en plus de r_t à chaque step.
+    """r_fin, §14.
+
+    MODIFIÉ : la pénalité de couverture est maintenant proportionnelle
+    à Ŵ = n_white/n_total, pas une constante fixe. AVANT : n_white>0
+    donnait toujours -R_couverture, quel que soit le degré de
+    couverture manquante — même signal pour "1 point blanc" et "tous
+    les points blancs". APRÈS : -R_couverture * Ŵ, donc quasi 0 si
+    presque tout est couvert, -R_couverture si rien n'est couvert.
+
+    Raison : la version constante donnait le même signal terminal
+    (~-R_couverture) pour n'importe quelle dernière action d'épisode,
+    peu importe sa qualité réelle — un bruit d'étiquetage qui empêchait
+    l'apprentissage plutôt que de le ralentir (observé sur un run réel
+    de 746 épisodes : perte qui augmente au lieu de baisser, n_white
+    qui ne progresse pas malgré epsilon tombé à 0.106).
 
     n_white : N_white(I_T), compte brut (pas Ŵ).
+    n_total : N_total, pour normaliser n_white en Ŵ (§11).
     qos_min : Q_min(I_T), le pire cas le long de la trajectoire choisie
         par la DP (qos_min retourné par trajectory_dp()).
     cost_total : Cost(I_T), coût total engagé (cost_model.get_total_cost()
@@ -101,9 +115,11 @@ def compute_r_fin(n_white, qos_min, cost_total, budget,
             "R_couverture > R_qualité > 0, reçu "
             f"R_couverture={R_couverture}, R_qualité={R_qualite}"
         )
+    if n_total <= 0:
+        raise ValueError("compute_r_fin: n_total doit être positif")
 
     if n_white > 0:
-        return -R_couverture
+        return -R_couverture * (n_white / n_total)
     if qos_min < Q_critique:
         return -R_qualite
     return R_succes + R_eff * (1 - cost_total / budget)
