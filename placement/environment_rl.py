@@ -53,6 +53,15 @@ réelle en relisant le fichier des semaines plus tard). Désactivable via
 sauvegarder_deploiements_rl=False (écrire un CSV à chaque step a un
 coût, à éviter pour un entraînement massif si le log n'est pas
 nécessaire).
+
+CORRECTION (2e patch reward) : _finaliser() appelle maintenant
+compute_r_fin() avec n_total en plus (nouvelle signature de utility.py),
+et EN ARGUMENTS NOMMÉS explicitement — pas positionnels — pour qu'un
+futur changement de signature de compute_r_fin() lève une erreur claire
+("unexpected keyword" ou "missing argument") plutôt qu'un décalage
+silencieux des valeurs (c'est exactement ce qui s'est produit une fois :
+un appel positionnel avec un argument manquant a décalé tous les
+suivants sans erreur explicite immédiate).
 """
 
 import os
@@ -125,15 +134,6 @@ class FerroMobileEnv:
         # même seconde (arrive facilement en lançant plusieurs runs en
         # parallèle ou via un script qui instancie vite plusieurs envs).
         self.run_id = run_id if run_id is not None else f"{datetime.now():%Y-%m-%d_%H%M%S}_{uuid4().hex[:8]}"
-        # Un fichier PAR run_id, pas un fichier cumulatif partagé : élimine
-        # la condition de concurrence si plusieurs environnements/processus
-        # tournent en parallèle (chacun a son propre run_id -> son propre
-        # fichier, donc plus jamais deux processus qui écrivent le même
-        # en-tête au même endroit en même temps). Un dataset_enrichi_rl_path
-        # explicite reste possible (ex. pour forcer un chemin précis dans
-        # un test), mais alors la responsabilité d'éviter la concurrence
-        # entre processus qui partageraient ce même chemin explicite
-        # retombe sur l'appelant.
         self.dataset_enrichi_rl_path = (
             dataset_enrichi_rl_path if dataset_enrichi_rl_path is not None
             else os.path.join(DATASET_ENRICHI_RL_DIR, f"run_{self.run_id}.csv"))
@@ -178,8 +178,6 @@ class FerroMobileEnv:
         df_scenario = self.df_enrichi_complet[self.df_enrichi_complet["scenario_id"] == self.scenario]
         self.df_reel = df_scenario[(~df_scenario["in_tunnel"]) & (df_scenario["ant_id"].notna())]
 
-        # cells réelles par point (site en GPS exact, comme trajectory_dp.py
-        # l'a toujours attendu — non modifié).
         self._cells_reelles_par_point = {}
         for pid, lignes in self.df_reel.groupby("point_id"):
             self._cells_reelles_par_point[pid] = [
@@ -191,17 +189,15 @@ class FerroMobileEnv:
         self._points_reels = sorted(self._cells_reelles_par_point.keys())
         self.debit_reel_par_point = df_scenario[~df_scenario["in_tunnel"]].groupby("point_id")["debit_adj_mbps"].max()
 
-        # Ajouts hypothétiques de l'épisode, vide au départ.
-        self._resultats_hypo = []  # liste de dicts {point_id, cellule, qos, debit_adj_mbps}
+        self._resultats_hypo = []
 
-        # deploiements_reels : une seule fois par ant_id, PAS point par point.
         antennes_uniques = self.df_reel[["ant_id", "ant_lat", "ant_lon", "generation", "bande_mhz"]].drop_duplicates("ant_id")
         self.deploiements_reels = set()
         self.sites_deja_presents = set()
         for row in antennes_uniques.itertuples():
             c = self.grille.gps_vers_cellule(row.ant_lat, row.ant_lon)
             if c is None:
-                continue  # site réel hors grille : ne devrait jamais arriver (0/29 vérifié)
+                continue
             self.deploiements_reels.add((c[0], c[1], row.generation, row.bande_mhz))
             self.sites_deja_presents.add(c)
 
@@ -210,7 +206,6 @@ class FerroMobileEnv:
         self.t = 0
         self.done = False
 
-        # U(I_0), calculé une fois pour servir de référence au premier r_t.
         resultat_dp, n_white, n_eval = self._evaluer_dp_courant()
         self._dernier_resultat_dp = resultat_dp
         self._dernier_n_white = n_white
@@ -224,10 +219,6 @@ class FerroMobileEnv:
     # ÉVALUATION (DP + N_white), factorisée pour reset() et step()
     # ------------------------------------------------------------------
     def _fusionner_cells_par_point(self):
-        """Même logique que ajouter_cellules_hypothetiques() de
-        valider_chaine_complete.py — un point qui n'avait aucun candidat
-        réel et reçoit une cellule hypothétique est AJOUTÉ, pas seulement
-        complété."""
         cellules_hypo_par_point = {}
         for r in self._resultats_hypo:
             cellules_hypo_par_point.setdefault(r["point_id"], []).append(r)
@@ -245,13 +236,6 @@ class FerroMobileEnv:
 
     @staticmethod
     def _serie_max_par_point(resultats, cle):
-        """Construit une Series point_id -> max(valeur) à partir d'une
-        liste de dicts, SANS passer par un dict intermédiaire {point_id: v}
-        qui écraserait silencieusement les doublons (plusieurs cellules
-        hypothétiques peuvent couvrir le même point_id) avant qu'un
-        éventuel groupby ait la moindre chance d'agir. Toujours construire
-        la Series à partir de listes (valeurs, index) séparées, puis
-        grouper — jamais l'inverse."""
         if not resultats:
             return pd.Series(dtype=float)
         return pd.Series(
@@ -263,9 +247,6 @@ class FerroMobileEnv:
         points, cells_par_point = self._fusionner_cells_par_point()
         resultat_dp = trajectory_dp(points, cells_par_point, LAMBDA_H, LAMBDA_O, LAMBDA_T)
 
-        # N_white : meilleur débit (réel + hypothétique) sur TOUT le
-        # corridor (N_total), pas seulement les points évalués par la DP
-        # (N_eval) — §11.
         if self._resultats_hypo:
             debit_hypo = self._serie_max_par_point(self._resultats_hypo, "debit_adj_mbps")
             debit_combine = pd.concat([self.debit_reel_par_point, debit_hypo], axis=1).max(axis=1)
@@ -312,25 +293,6 @@ class FerroMobileEnv:
             debit_combine = self.debit_reel_par_point
 
         meilleur_par_point = pd.DataFrame({"point_id": debit_combine.index, "meilleur_debit": debit_combine.values})
-        # Canal QoS : le maximum des QoS disponibles (réelles et
-        # hypothétiques) à ce point, indépendamment de quelle cellule a le
-        # meilleur débit — ce n'est PAS "la qos de la cellule au meilleur
-        # débit" (ce serait une agrégation différente, plus fine, pas
-        # celle utilisée ici). Approximation simple, cohérente avec
-        # l'agrégation déjà faite dans build_state_dynamic.py.
-        #
-        # IMPORTANT — ce canal représente le potentiel radio LOCAL maximal
-        # à chaque point (max sur les cellules disponibles), PAS le
-        # résultat de la trajectoire globalement optimale que sélectionne
-        # la DP (qui tient compte des pénalités de transition N_H/N_O/N_T,
-        # §10-11). Les deux quantités peuvent légitimement différer : un
-        # point peut avoir un excellent potentiel local (ce canal) tout en
-        # étant desservi par une cellule différente dans la trajectoire
-        # réellement choisie par la DP, si changer de cellule coûterait
-        # plus cher en pénalité de transition que le gain de QoS. La DP
-        # reste la SEULE source utilisée pour l'évaluation séquentielle
-        # (qos_mean, qos_min, N_H/N_O/N_T) et le calcul de U(I)/r_fin — ce
-        # canal ne nourrit que l'état visuel donné au CNN, jamais U(I).
         qos_reelle = self.df_reel.groupby("point_id")["qos"].max()
         if self._resultats_hypo:
             meilleure_qos = pd.concat([qos_reelle, qos_hypo], axis=1).max(axis=1)
@@ -347,27 +309,14 @@ class FerroMobileEnv:
         return {"grille": etat_spatial, "b_t": b_t, "progression": progression}
 
     def _resultats_hypo_pour_infra(self):
-        """build_state_dynamic.construire_canaux_infrastructure attend des
-        cellules hypothétiques sous forme {"cellule": (site,o,g,f)} où
-        site=(lat,lon) — déjà le format de self._resultats_hypo, aucune
-        conversion nécessaire."""
         return self._resultats_hypo
 
     # ------------------------------------------------------------------
-    # JOURNALISATION — fichier SÉPARÉ, dataset_enrichi.csv n'est jamais
-    # touché (lu une seule fois, en lecture seule, à __init__). En cas
-    # d'erreur d'entraînement, on peut inspecter exactement ce qui a été
-    # simulé sans jamais risquer de corrompre la version de référence.
+    # JOURNALISATION
     # ------------------------------------------------------------------
     def _verifier_schema_log_rl(self):
-        """Échoue vite et clairement si dataset_enrichi_rl_path pointe déjà
-        vers un fichier qui n'a pas le schéma attendu — typiquement une
-        copie accidentelle de dataset_enrichi.csv. Sans ce garde-fou,
-        _journaliser() ajouterait des lignes au format RL sous l'en-tête
-        d'un fichier au format réseau réel, corrompant silencieusement le
-        CSV (colonnes désalignées entre les lignes)."""
         if not os.path.exists(self.dataset_enrichi_rl_path):
-            return  # le fichier sera créé proprement au premier step()
+            return
         try:
             colonnes_existantes = set(pd.read_csv(self.dataset_enrichi_rl_path, nrows=0).columns)
         except Exception as e:
@@ -387,9 +336,6 @@ class FerroMobileEnv:
             )
 
     def _journaliser(self, action, lat_site, lon_site, cout, resultats_sim):
-        # Revérifié à chaque écriture, pas seulement au premier reset() :
-        # le fichier pourrait être remplacé entre deux épisodes (process
-        # externe, run concurrent...). Coût faible (nrows=0, juste l'en-tête).
         self._verifier_schema_log_rl()
 
         ix, iy, g, f = action
@@ -405,9 +351,6 @@ class FerroMobileEnv:
                        "rtt_ms": r.get("rtt_ms"), "ber": r.get("ber")}
                       for r in resultats_sim]
         else:
-            # Déploiement faisable mais qui ne couvre aucun point (portée/LOS) :
-            # journalisé quand même, avec point_id=None, pour ne pas perdre la
-            # trace de l'action elle-même (coût engagé pour rien).
             lignes = [{**base, "point_id": None, "qos": None, "debit_adj_mbps": None,
                        "rtt_ms": None, "ber": None}]
         df_log = pd.DataFrame(lignes)
@@ -443,7 +386,7 @@ class FerroMobileEnv:
 
         self._resultats_hypo.extend(resultats_sim)
         self.infrastructure_deployee.add((ix, iy, g, f))
-        self.sites_deja_presents.add((ix, iy))  # add() sur un set déjà présent : pas de second C_site
+        self.sites_deja_presents.add((ix, iy))
         self.budget_restant -= cout
 
         resultat_dp, n_white, n_eval = self._evaluer_dp_courant()
@@ -456,10 +399,6 @@ class FerroMobileEnv:
         self._dernier_n_eval = n_eval
         self.t += 1
 
-        # Fin forcée si plus aucune action de déploiement n'est faisable
-        # (budget épuisé, §14 : "STOP, ou budget épuisé") ou si t_max
-        # atteint (garde-fou d'implémentation, pas une contrainte du
-        # cahier des charges — évite un épisode infini).
         aucune_action_deploiement_possible = not any(
             self._est_faisable(a) for a in self.actions if a != STOP)
         if aucune_action_deploiement_possible or self.t >= self.t_max:
@@ -471,25 +410,21 @@ class FerroMobileEnv:
         return self._finaliser(0.0)
 
     def _finaliser(self, r_t_dernier_step):
-        # Le coût total engagé est directement le budget consommé : il est
-        # décrémenté correctement à CHAQUE step() dans l'ordre réel des
-        # décisions (get_total_cost dépend de l'ordre d'ajout pour C_site,
-        # donc le recalculer hors-ligne sans cet historique serait faux).
-        # self.budget_restant est la seule source de vérité pour Cost(I_T).
         cout_total = self.budget_total - self.budget_restant
 
+        # Arguments NOMMÉS, jamais positionnels — voir docstring du module.
         r_fin = compute_r_fin(
-    n_white=self._dernier_n_white,
-    n_total=self.n_total,
-    qos_min=self._dernier_resultat_dp["qos_min"],
-    cost_total=cout_total,
-    budget=self.budget_total,
-    Q_critique=self.Q_critique,
-    R_couverture=self.R_couverture,
-    R_qualite=self.R_qualite,
-    R_succes=self.R_succes,
-    R_eff=self.R_eff,
-)
+            n_white=self._dernier_n_white,
+            n_total=self.n_total,
+            qos_min=self._dernier_resultat_dp["qos_min"],
+            cost_total=cout_total,
+            budget=self.budget_total,
+            Q_critique=self.Q_critique,
+            R_couverture=self.R_couverture,
+            R_qualite=self.R_qualite,
+            R_succes=self.R_succes,
+            R_eff=self.R_eff,
+        )
 
         self.done = True
         return self._construire_etat(), r_t_dernier_step + r_fin, True, {

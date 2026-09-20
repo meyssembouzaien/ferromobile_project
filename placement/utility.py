@@ -86,19 +86,28 @@ def compute_r_fin(n_white, n_total, qos_min, cost_total, budget,
                    Q_critique, R_couverture, R_qualite, R_succes, R_eff):
     """r_fin, §14.
 
-    MODIFIÉ : la pénalité de couverture est maintenant proportionnelle
-    à Ŵ = n_white/n_total, pas une constante fixe. AVANT : n_white>0
-    donnait toujours -R_couverture, quel que soit le degré de
-    couverture manquante — même signal pour "1 point blanc" et "tous
-    les points blancs". APRÈS : -R_couverture * Ŵ, donc quasi 0 si
-    presque tout est couvert, -R_couverture si rien n'est couvert.
+    MODIFIÉ (2e correction) : la pénalité de couverture est proportionnelle
+    à Ŵ = n_white/n_total, MAIS ancrée à -R_qualité plutôt qu'à 0, pour
+    préserver la hiérarchie R_couverture > R_qualité voulue par le §14.
 
-    Raison : la version constante donnait le même signal terminal
-    (~-R_couverture) pour n'importe quelle dernière action d'épisode,
-    peu importe sa qualité réelle — un bruit d'étiquetage qui empêchait
-    l'apprentissage plutôt que de le ralentir (observé sur un run réel
-    de 746 épisodes : perte qui augmente au lieu de baisser, n_white
-    qui ne progresse pas malgré epsilon tombé à 0.106).
+    Historique des deux versions précédentes, pour ne pas réintroduire
+    les mêmes erreurs :
+      v1 (originale) : n_white>0 -> toujours -R_couverture, quel que soit
+          le degré. Bug : même signal pour 1 point blanc et 300 points
+          blancs, bruit d'étiquetage qui empêchait l'apprentissage.
+      v2 (1ère correction) : -R_couverture * Ŵ. Corrige le bruit
+          d'étiquetage, MAIS introduit un nouveau bug : à Ŵ faible (ex.
+          0,19), la pénalité (-19) devient plus petite en magnitude que
+          -R_qualité (-50), inversant la hiérarchie voulue — une zone
+          blanche, même minime, serait punie moins sévèrement qu'une
+          mauvaise QoS sans zone blanche.
+      v3 (celle-ci) : -R_qualité - (R_couverture - R_qualité) * Ŵ.
+          Toujours proportionnelle (varie avec Ŵ, donc distingue "1 point
+          blanc" de "300 points blancs"), mais reste TOUJOURS <= -R_qualité
+          (continue exactement à -R_qualité quand Ŵ->0, atteint -R_couverture
+          quand Ŵ=1) — la hiérarchie R_couverture > R_qualité est donc
+          préservée à tout niveau de couverture manquante, pas seulement
+          au pire cas.
 
     n_white : N_white(I_T), compte brut (pas Ŵ).
     n_total : N_total, pour normaliser n_white en Ŵ (§11).
@@ -119,7 +128,7 @@ def compute_r_fin(n_white, n_total, qos_min, cost_total, budget,
         raise ValueError("compute_r_fin: n_total doit être positif")
 
     if n_white > 0:
-        return -R_couverture * (n_white / n_total)
+        return -R_qualite - (R_couverture - R_qualite) * (n_white / n_total)
     if qos_min < Q_critique:
         return -R_qualite
     return R_succes + R_eff * (1 - cost_total / budget)
