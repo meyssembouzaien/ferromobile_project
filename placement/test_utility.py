@@ -3,10 +3,14 @@ test_utility.py — Tests unitaires pour utility.py
 
 Ces tests valident le MÉCANISME de U(I) et r_fin (formules, branches,
 cas limites), avec des valeurs à la main. Ce ne sont PAS les 5 scénarios
-jouets du §26 point 3 (couverture seule, conflit couverture/QoS, etc.) :
-ceux-là nécessitent une recherche exhaustive sur un petit cas réel
-(DP + simulateur + cost_model ensemble) et sont la prochaine étape,
-une fois ce mécanisme de base confirmé correct.
+jouets du §26 point 3 : ceux-là sont dans test_r_fin.py.
+
+MODIFIÉ (2e correction reward) : compute_r_fin() prend maintenant
+n_total en plus, et la formule pour n_white>0 est proportionnelle
+(-R_qualité - (R_couverture-R_qualité)*n_white/n_total), pas une
+constante -R_couverture. test_r_fin_zone_blanche_domine() reflète ce
+changement : elle vérifie maintenant que le résultat reste <= -R_qualité
+(la vraie propriété garantie), pas une valeur fixe -100.
 """
 
 from utility import normaliser_metriques, compute_U, compute_r_t, compute_r_fin
@@ -50,16 +54,34 @@ def test_compute_r_t_difference_simple():
     print("test_compute_r_t_difference_simple : OK")
 
 
-def test_r_fin_zone_blanche_domine():
-    r = compute_r_fin(n_white=5, qos_min=0.99, cost_total=10_000, budget=1_000_000,
+def test_r_fin_zone_blanche_toujours_sous_r_qualite():
+    """MODIFIÉ : n_white>0 ne donne plus -R_couverture fixe, mais une
+    valeur proportionnelle à Ŵ=n_white/n_total. La vraie propriété
+    garantie (§14, hiérarchie R_couverture > R_qualité) est que ce
+    résultat reste TOUJOURS <= -R_qualité, quel que soit Ŵ>0 — donc
+    une zone blanche, même minime, reste toujours au moins aussi
+    pénalisée qu'une qualité insuffisante sans zone blanche."""
+    r = compute_r_fin(n_white=5, n_total=100, qos_min=0.99, cost_total=10_000, budget=1_000_000,
                        Q_critique=0.3, R_couverture=100, R_qualite=50,
                        R_succes=200, R_eff=50)
-    assert r == -100
-    print("test_r_fin_zone_blanche_domine : OK")
+    # Ŵ = 5/100 = 0.05 -> r = -50 - 50*0.05 = -52.5
+    assert abs(r - (-52.5)) < 1e-9
+    assert r <= -50  # propriété garantie : toujours <= -R_qualité
+    print("test_r_fin_zone_blanche_toujours_sous_r_qualite : OK")
+
+
+def test_r_fin_zone_blanche_pire_cas_egale_r_couverture():
+    """Cas limite Ŵ=1 (tout blanc) : doit redonner exactement -R_couverture,
+    comme avant la correction — vérifie la continuité aux deux bornes."""
+    r = compute_r_fin(n_white=100, n_total=100, qos_min=0.99, cost_total=10_000, budget=1_000_000,
+                       Q_critique=0.3, R_couverture=100, R_qualite=50,
+                       R_succes=200, R_eff=50)
+    assert abs(r - (-100.0)) < 1e-9
+    print("test_r_fin_zone_blanche_pire_cas_egale_r_couverture : OK")
 
 
 def test_r_fin_qualite_insuffisante():
-    r = compute_r_fin(n_white=0, qos_min=0.2, cost_total=10_000, budget=1_000_000,
+    r = compute_r_fin(n_white=0, n_total=100, qos_min=0.2, cost_total=10_000, budget=1_000_000,
                        Q_critique=0.3, R_couverture=100, R_qualite=50,
                        R_succes=200, R_eff=50)
     assert r == -50
@@ -67,7 +89,7 @@ def test_r_fin_qualite_insuffisante():
 
 
 def test_r_fin_succes_avec_efficacite():
-    r = compute_r_fin(n_white=0, qos_min=0.5, cost_total=400_000, budget=1_000_000,
+    r = compute_r_fin(n_white=0, n_total=100, qos_min=0.5, cost_total=400_000, budget=1_000_000,
                        Q_critique=0.3, R_couverture=100, R_qualite=50,
                        R_succes=200, R_eff=50)
     attendu = 200 + 50 * (1 - 400_000 / 1_000_000)
@@ -76,7 +98,7 @@ def test_r_fin_succes_avec_efficacite():
 
 
 def test_r_fin_succes_cout_nul_bonus_maximal():
-    r = compute_r_fin(n_white=0, qos_min=0.9, cost_total=0, budget=1_000_000,
+    r = compute_r_fin(n_white=0, n_total=100, qos_min=0.9, cost_total=0, budget=1_000_000,
                        Q_critique=0.3, R_couverture=100, R_qualite=50,
                        R_succes=200, R_eff=50)
     assert r == 200 + 50
@@ -85,12 +107,23 @@ def test_r_fin_succes_cout_nul_bonus_maximal():
 
 def test_r_fin_rejette_poids_incoherents():
     try:
-        compute_r_fin(n_white=0, qos_min=0.9, cost_total=0, budget=1_000_000,
+        compute_r_fin(n_white=0, n_total=100, qos_min=0.9, cost_total=0, budget=1_000_000,
                       Q_critique=0.3, R_couverture=50, R_qualite=50,
                       R_succes=200, R_eff=50)
         assert False, "devrait lever ValueError"
     except ValueError:
         print("test_r_fin_rejette_poids_incoherents : OK")
+
+
+def test_r_fin_rejette_n_total_invalide():
+    """Ajouté avec la 2e correction : n_total doit être positif."""
+    try:
+        compute_r_fin(n_white=0, n_total=0, qos_min=0.9, cost_total=0, budget=1_000_000,
+                      Q_critique=0.3, R_couverture=100, R_qualite=50,
+                      R_succes=200, R_eff=50)
+        assert False, "devrait lever ValueError"
+    except ValueError:
+        print("test_r_fin_rejette_n_total_invalide : OK")
 
 
 if __name__ == "__main__":
@@ -99,9 +132,11 @@ if __name__ == "__main__":
     test_compute_U_poids_egaux()
     test_compute_U_penalites_soustraites()
     test_compute_r_t_difference_simple()
-    test_r_fin_zone_blanche_domine()
+    test_r_fin_zone_blanche_toujours_sous_r_qualite()
+    test_r_fin_zone_blanche_pire_cas_egale_r_couverture()
     test_r_fin_qualite_insuffisante()
     test_r_fin_succes_avec_efficacite()
     test_r_fin_succes_cout_nul_bonus_maximal()
     test_r_fin_rejette_poids_incoherents()
+    test_r_fin_rejette_n_total_invalide()
     print("\nTous les tests passent.")
