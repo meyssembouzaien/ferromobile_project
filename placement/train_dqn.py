@@ -167,6 +167,7 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
     epsilon = epsilon_debut
     total_steps = 0
     debut_total = time.time()
+    N_EPISODES_DEBUG = 3  # trace détaillée par step, gratuite, sur les 3 premiers épisodes seulement
 
     for episode in range(n_episodes):
         debut_episode = time.time()
@@ -182,6 +183,11 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
             action = env.actions[action_idx]
 
             etat_suivant, reward, done, info = env.step(action)
+
+            if episode < N_EPISODES_DEBUG:
+                r_fin_info = f", r_fin={info['r_fin']:.4f}" if "r_fin" in info else ""
+                print(f"    step {t}: action={action if action == 'STOP' else action[:2]}..., "
+                      f"reward={reward:.4f}{r_fin_info}, n_white={info.get('n_white')}")
 
             # Masque suivant : réel si pas terminal, sinon un remplisseur
             # sûr (jamais utilisé dans la cible, voir calculer_cibles).
