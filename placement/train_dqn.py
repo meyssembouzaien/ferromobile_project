@@ -24,7 +24,7 @@ RACINE_PROJET = os.path.dirname(CE_FICHIER)                 # .../ferromobile_pr
 DOSSIER_CHECKPOINTS = os.path.join(RACINE_PROJET, "checkpoints")
 
 # Hyperparamètres du smoke test — à ajuster une fois le pipeline validé.
-T_MAX_SMOKE_TEST = 20
+T_MAX_SMOKE_TEST = 150
 N_EPISODES_TRAIN = 1000
 BATCH_SIZE = 32
 GAMMA = 0.99
@@ -270,7 +270,7 @@ if __name__ == "__main__":
     print(f"Device : {device}")
 
     env = FerroMobileEnv(
-        scenario="S1", budget=500_000.0, t_max=T_MAX_SMOKE_TEST,
+        scenario="S1", budget=10_000_000.0, t_max=T_MAX_SMOKE_TEST,
         sauvegarder_deploiements_rl=False,
     )
 

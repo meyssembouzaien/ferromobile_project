@@ -399,9 +399,16 @@ class FerroMobileEnv:
         self._dernier_n_eval = n_eval
         self.t += 1
 
+        # Fin forcée : budget épuisé (§14), t_max atteint (garde-fou
+        # d'implémentation), OU couverture complète atteinte (n_white=0) —
+        # ce dernier cas correspond à l'objectif réel "zéro zone blanche,
+        # coût minimal" : une fois atteint, continuer à dépenser ne ferait
+        # que dégrader r_fin (le terme d'efficacité coût diminue avec
+        # cost_total), donc STOP naturel dès que possible.
         aucune_action_deploiement_possible = not any(
             self._est_faisable(a) for a in self.actions if a != STOP)
-        if aucune_action_deploiement_possible or self.t >= self.t_max:
+        couverture_complete = n_white == 0
+        if aucune_action_deploiement_possible or couverture_complete or self.t >= self.t_max:
             return self._finaliser(r_t)
 
         return self._construire_etat(), r_t, False, {"cout": cout, "n_white": n_white}
