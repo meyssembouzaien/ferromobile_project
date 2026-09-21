@@ -22,16 +22,23 @@ from replay_buffer import ReplayBuffer
 CE_FICHIER = os.path.dirname(os.path.abspath(__file__))    # .../placement
 RACINE_PROJET = os.path.dirname(CE_FICHIER)                 # .../ferromobile_project
 DOSSIER_CHECKPOINTS = os.path.join(RACINE_PROJET, "checkpoints")
+CHEMIN_DERNIER_CHECKPOINT = os.path.join(DOSSIER_CHECKPOINTS, "dernier.pt")
 
-# Hyperparamètres du smoke test — à ajuster une fois le pipeline validé.
+# Hyperparamètres — à ajuster une fois le pipeline validé.
 T_MAX_SMOKE_TEST = 150
-N_EPISODES_TRAIN = 1000
+N_EPISODES_TRAIN = 40  # réaliste pour une session Colab, à ~140s/épisode (~1h30 au total)
 BATCH_SIZE = 32
 GAMMA = 0.99
 LR = 1e-4
 EPSILON_DEBUT = 1.0
 EPSILON_FIN = 0.05
-EPSILON_DECROISSANCE = 0.997  # multiplié à chaque fin d'épisode — étalé sur 1000 épisodes
+# Décroissance PAR STEP (pas par épisode) : les épisodes sont maintenant
+# stables en nombre de steps (~60-65), donc décroître par step colle à la
+# vraie quantité d'exploration accumulée, et reste correct même si
+# N_EPISODES_TRAIN change. Calibré pour atteindre le plancher vers 90%
+# d'un budget de ~40 épisodes x ~62 steps/épisode ≈ 2480 steps :
+# 0.05^(1/2200) ≈ 0.99864.
+EPSILON_DECROISSANCE = 0.99864
 CAPACITE_BUFFER = 500
 MAJ_CIBLE_TOUS_LES_N_STEPS = 20
 SAUVER_TOUS_LES_N_EPISODES = 25  # checkpoint disque
@@ -148,28 +155,58 @@ def verifier_integration(env, modele, device):
 
 def sauver_checkpoint(modele, optimiseur, episode, epsilon, total_steps):
     os.makedirs(DOSSIER_CHECKPOINTS, exist_ok=True)
-    chemin = os.path.join(DOSSIER_CHECKPOINTS, f"checkpoint_ep{episode}.pt")
-    torch.save({
+    etat = {
         "modele": modele.state_dict(),
         "optimiseur": optimiseur.state_dict(),
         "episode": episode,
         "epsilon": epsilon,
         "total_steps": total_steps,
-    }, chemin)
+    }
+    chemin = os.path.join(DOSSIER_CHECKPOINTS, f"checkpoint_ep{episode}.pt")
+    torch.save(etat, chemin)
+    # Copie à nom fixe en plus du fichier numéroté : permet à
+    # charger_checkpoint() de retrouver le dernier état sans avoir à
+    # parser les noms de fichiers ni trier par date.
+    torch.save(etat, CHEMIN_DERNIER_CHECKPOINT)
     print(f"  checkpoint sauvegardé : {chemin}")
+
+
+def charger_checkpoint(modele, optimiseur, device):
+    """Reprend un entraînement interrompu. Restaure modèle + optimiseur
+    + epsilon + total_steps + épisode de départ. Le buffer de replay
+    repart vide (pas sauvegardé) — acceptable : il se remplit vite
+    (capacité 500) et ne contient de toute façon que les dernières
+    transitions, pas un historique qu'on chercherait à préserver.
+
+    Retourne (episode_depart, epsilon, total_steps) — episode_depart=0
+    si aucun checkpoint trouvé (premier lancement, pas une erreur)."""
+    if not os.path.exists(CHEMIN_DERNIER_CHECKPOINT):
+        print("Aucun checkpoint trouvé — nouvel entraînement depuis le début.")
+        return 0, EPSILON_DEBUT, 0
+
+    etat = torch.load(CHEMIN_DERNIER_CHECKPOINT, map_location=device)
+    modele.load_state_dict(etat["modele"])
+    optimiseur.load_state_dict(etat["optimiseur"])
+    print(f"Checkpoint chargé : reprise à partir de l'épisode {etat['episode']}, "
+          f"epsilon={etat['epsilon']:.3f}, total_steps={etat['total_steps']}")
+    return etat["episode"], etat["epsilon"], etat["total_steps"]
 
 
 def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
                           n_episodes, t_max, batch_size, gamma,
                           epsilon_debut, epsilon_fin, epsilon_decroissance,
                           maj_cible_tous_les_n_steps,
+                          episode_depart=0, total_steps_depart=0,
                           sauver_tous_les_n_episodes=SAUVER_TOUS_LES_N_EPISODES):
+    """episode_depart/total_steps_depart : non-zéro si on reprend depuis
+    un checkpoint (charger_checkpoint()). epsilon_debut doit alors déjà
+    être la valeur restaurée, pas EPSILON_DEBUT."""
     epsilon = epsilon_debut
-    total_steps = 0
+    total_steps = total_steps_depart
     debut_total = time.time()
-    N_EPISODES_DEBUG = 3  # trace détaillée par step, gratuite, sur les 3 premiers épisodes seulement
+    N_EPISODES_DEBUG = 3 if episode_depart == 0 else 0  # trace détaillée seulement au tout premier lancement
 
-    for episode in range(n_episodes):
+    for episode in range(episode_depart, n_episodes):
         debut_episode = time.time()
         etat = env.reset()
         done = False
@@ -209,6 +246,9 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
             t += 1
             total_steps += 1
 
+            # Décroissance PAR STEP, pas par épisode (voir constante).
+            epsilon = max(epsilon_fin, epsilon * epsilon_decroissance)
+
             if len(buffer) >= batch_size:
                 perte = entrainer_un_batch(modele, modele_cible, optimiseur, buffer, batch_size, gamma, device)
                 pertes.append(perte)
@@ -216,7 +256,6 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
             if total_steps % maj_cible_tous_les_n_steps == 0:
                 modele_cible.load_state_dict(modele.state_dict())
 
-        epsilon = max(epsilon_fin, epsilon * epsilon_decroissance)
         perte_moy = sum(pertes) / len(pertes) if pertes else float("nan")
         duree_episode = time.time() - debut_episode
 
@@ -238,7 +277,11 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
             sauver_checkpoint(modele, optimiseur, episode + 1, epsilon, total_steps)
 
     duree_totale = time.time() - debut_total
-    print(f"\nDurée totale : {duree_totale:.1f}s ({duree_totale / n_episodes:.1f}s/épisode en moyenne)")
+    episodes_cette_session = n_episodes - episode_depart
+    if episodes_cette_session > 0:
+        print(f"\nDurée totale : {duree_totale:.1f}s "
+              f"({duree_totale / episodes_cette_session:.1f}s/épisode en moyenne, "
+              f"{episodes_cette_session} épisodes cette session)")
     sauver_checkpoint(modele, optimiseur, n_episodes, epsilon, total_steps)  # checkpoint final, toujours
 
 
@@ -278,26 +321,35 @@ if __name__ == "__main__":
 
     modele = FerroMobileDQN(n_configs_radio=n_configs_radio, corridor_mask=env.grille.corridor_mask).to(device)
     modele_cible = FerroMobileDQN(n_configs_radio=n_configs_radio, corridor_mask=env.grille.corridor_mask).to(device)
+    optimiseur = torch.optim.Adam(modele.parameters(), lr=LR)
+
+    # Reprise automatique si un checkpoint existe déjà (dernier.pt) —
+    # sinon episode_depart=0, epsilon=EPSILON_DEBUT, total_steps=0,
+    # comme un premier lancement normal.
+    episode_depart, epsilon_reprise, total_steps_depart = charger_checkpoint(modele, optimiseur, device)
     modele_cible.load_state_dict(modele.state_dict())
     modele_cible.eval()
 
     verifier_integration(env, modele, device)
     verifier_ordre_actions(env, n_configs_radio)
 
-    buffer = ReplayBuffer(
-        capacity=CAPACITE_BUFFER,
-        nx=env.grille.nx, ny=env.grille.ny,
-        n_canaux_etat=FerroMobileDQN.N_CANAUX_ETAT,
-        n_actions=len(env.actions),
-    )
+    if episode_depart >= N_EPISODES_TRAIN:
+        print(f"episode_depart={episode_depart} >= N_EPISODES_TRAIN={N_EPISODES_TRAIN} : "
+              "rien à faire, augmente N_EPISODES_TRAIN pour continuer l'entraînement.")
+    else:
+        buffer = ReplayBuffer(
+            capacity=CAPACITE_BUFFER,
+            nx=env.grille.nx, ny=env.grille.ny,
+            n_canaux_etat=FerroMobileDQN.N_CANAUX_ETAT,
+            n_actions=len(env.actions),
+        )
 
-    optimiseur = torch.optim.Adam(modele.parameters(), lr=LR)
-
-    boucle_entrainement(
-        env, modele, modele_cible, buffer, optimiseur, device,
-        n_episodes=N_EPISODES_TRAIN, t_max=T_MAX_SMOKE_TEST,
-        batch_size=BATCH_SIZE, gamma=GAMMA,
-        epsilon_debut=EPSILON_DEBUT, epsilon_fin=EPSILON_FIN,
-        epsilon_decroissance=EPSILON_DECROISSANCE,
-        maj_cible_tous_les_n_steps=MAJ_CIBLE_TOUS_LES_N_STEPS,
-    )
+        boucle_entrainement(
+            env, modele, modele_cible, buffer, optimiseur, device,
+            n_episodes=N_EPISODES_TRAIN, t_max=T_MAX_SMOKE_TEST,
+            batch_size=BATCH_SIZE, gamma=GAMMA,
+            epsilon_debut=epsilon_reprise, epsilon_fin=EPSILON_FIN,
+            epsilon_decroissance=EPSILON_DECROISSANCE,
+            maj_cible_tous_les_n_steps=MAJ_CIBLE_TOUS_LES_N_STEPS,
+            episode_depart=episode_depart, total_steps_depart=total_steps_depart,
+        )

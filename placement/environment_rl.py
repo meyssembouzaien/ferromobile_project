@@ -94,8 +94,21 @@ LAMBDA_H, LAMBDA_O, LAMBDA_T = 0.05, 0.05, 0.05
 # celles définies pour cette génération dans les profils techniques du
 # pipeline". Ne jamais dupliquer cette liste à la main : si TECH_PROFILES
 # change, cette dérivation suit automatiquement.
+#
+# EXCEPTION EXPLICITE : le 2G est retiré de l'espace d'action. Fait déjà
+# établi (cahier des charges §24) : son débit max (~0.24 Mbps) ne peut
+# JAMAIS dépasser D_cov=1.0, quelle que soit la distance — une action 2G
+# ne peut donc jamais réduire N_white. C'est aussi la techno à la plus
+# grande portée (20km), donc la plus coûteuse à simuler (le plus de
+# points du corridor dans son rayon). La retirer réduit |A| et évite
+# l'action la plus chère à calculer parmi celles qu'on sait déjà inutiles
+# pour l'objectif de couverture — pas un choix arbitraire.
+GENERATIONS_EXCLUES = {"2G"}
+
 BANDES_PAR_GENERATION = {}
 for _gen, _bande in TECH_PROFILES.keys():
+    if _gen in GENERATIONS_EXCLUES:
+        continue
     BANDES_PAR_GENERATION.setdefault(_gen, []).append(_bande)
 for _gen in BANDES_PAR_GENERATION:
     BANDES_PAR_GENERATION[_gen].sort()
