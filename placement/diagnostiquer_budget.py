@@ -36,7 +36,7 @@ SCENARIO = "S1"
 D_COV = 1.0
 BUDGET_MAX = 10_000_000.0  # même budget que le RL, pour une comparaison équitable
 DISTANCE_ANTENNE_M = 100
-DIRECTIONS_DEG = [0, 90, 180, 270]  # 4 directions par point blanc, pas 8 — pour rester calculable
+DIRECTIONS_DEG = [0, 180]  # réduit à 2 directions pour un premier test de vitesse — remets [0, 90, 180, 270] une fois la vitesse réelle connue
 GENERATIONS_EXCLUES = {"2G"}  # même exclusion que l'espace d'action RL (§10, jamais couvrant)
 
 
@@ -68,7 +68,7 @@ def main():
     cout_total = 0.0
     n_sites = 0
 
-    print(f"Départ : n_white={int((debit_courant < D_COV).sum())} / {n_total}, budget={BUDGET_MAX:.0f}€\n")
+    print(f"Départ : n_white={int((debit_courant < D_COV).sum())} / {n_total}, budget={BUDGET_MAX:.0f}€\n", flush=True)
 
     while True:
         points_blancs = df_points[
@@ -77,13 +77,19 @@ def main():
         ]
         n_white = len(points_blancs)
         if n_white == 0:
-            print(f"\n>>> ZÉRO ZONE BLANCHE ATTEINTE : {n_sites} sites, {cout_total:.0f}€ dépensés <<<")
+            print(f"\n>>> ZÉRO ZONE BLANCHE ATTEINTE : {n_sites} sites, {cout_total:.0f}€ dépensés <<<", flush=True)
             break
+
+        print(f"  (évaluation de {n_white} points blancs x {len(DIRECTIONS_DEG)} directions x "
+              f"{len(combos)} technos = {n_white * len(DIRECTIONS_DEG) * len(combos)} combinaisons "
+              f"pour ce site...)", flush=True)
 
         meilleur_ratio = 0.0
         meilleure_action = None  # (lat, lon, gen, bande, cout, points_couverts_set)
 
-        for point in points_blancs.itertuples():
+        for i, point in enumerate(points_blancs.itertuples()):
+            if i % 20 == 0:  # heartbeat toutes les 20 points, pour prouver que ça calcule
+                print(f"    ... point {i}/{n_white} en cours d'évaluation", flush=True)
             for direction in DIRECTIONS_DEG:
                 lat_ant, lon_ant = decaler_gps(point.lat, point.lon, DISTANCE_ANTENNE_M, direction)
                 for gen, bande in combos:
@@ -106,7 +112,7 @@ def main():
 
         if meilleure_action is None:
             print(f"\n>>> BLOQUÉ : aucune action améliorante trouvée dans le budget restant "
-                  f"({budget_restant:.0f}€). n_white={n_white} restant. <<<")
+                  f"({budget_restant:.0f}€). n_white={n_white} restant. <<<", flush=True)
             break
 
         lat_ant, lon_ant, gen, bande, cout, nouveaux_couverts = meilleure_action
@@ -118,10 +124,10 @@ def main():
         n_sites += 1
 
         print(f"  site {n_sites} : {gen}/{bande} -> {len(nouveaux_couverts)} points couverts, "
-              f"{cout:.0f}€, budget restant={budget_restant:.0f}€, n_white={n_white - len(nouveaux_couverts)}")
+              f"{cout:.0f}€, budget restant={budget_restant:.0f}€, n_white={n_white - len(nouveaux_couverts)}", flush=True)
 
         if budget_restant <= 0:
-            print(f"\n>>> BUDGET ÉPUISÉ : {n_sites} sites, n_white={n_white - len(nouveaux_couverts)} restant <<<")
+            print(f"\n>>> BUDGET ÉPUISÉ : {n_sites} sites, n_white={n_white - len(nouveaux_couverts)} restant <<<", flush=True)
             break
 
 
