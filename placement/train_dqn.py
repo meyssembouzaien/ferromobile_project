@@ -26,21 +26,23 @@ CHEMIN_DERNIER_CHECKPOINT = os.path.join(DOSSIER_CHECKPOINTS, "dernier.pt")
 
 # Hyperparamètres — à ajuster une fois le pipeline validé.
 T_MAX_SMOKE_TEST = 150
-N_EPISODES_TRAIN = 40  # réaliste pour une session Colab, à ~140s/épisode (~1h30 au total)
+N_EPISODES_TRAIN = 20  # test rapide de sécurité avec gamma=1.0, sur Colab, avant d'engager les 1000 sur Kaggle
 BATCH_SIZE = 32
-GAMMA = 0.99
+GAMMA = 1.0  # était 0.99 — épisodique, horizon fini (t_max), récompenses bornées : rien ne justifie gamma<1 ici. Avec gamma=1, le retour du DQN correspond exactement à U_T-U_0+r_fin (télescopage de r_t), cohérent avec le cahier des charges §14. Aucun risque numérique (épisodes toujours <100 steps en pratique, confirmé sur données réelles).
 LR = 1e-4
 EPSILON_DEBUT = 1.0
 EPSILON_FIN = 0.05
-# Décroissance PAR STEP (pas par épisode) : les épisodes sont maintenant
-# stables en nombre de steps (~60-65), donc décroître par step colle à la
-# vraie quantité d'exploration accumulée, et reste correct même si
-# N_EPISODES_TRAIN change. Calibré pour atteindre le plancher vers 90%
-# d'un budget de ~40 épisodes x ~62 steps/épisode ≈ 2480 steps :
-# 0.05^(1/2200) ≈ 0.99864.
-EPSILON_DECROISSANCE = 0.99864
-CAPACITE_BUFFER = 500
-MAJ_CIBLE_TOUS_LES_N_STEPS = 20
+# Décroissance PAR STEP, recalibrée pour 100 épisodes x ~65 steps ≈ 6500 steps
+# total (Phase 1). Plancher visé vers 90% de ce budget (~5850 steps) :
+# 0.05^(1/5850) ≈ 0.999488.
+# ATTENTION avant la Phase 2 (1000 épisodes) : recalibrer cette constante
+# pour le nouveau budget de steps, ET décider si on repart de zéro ou si
+# on continue depuis le checkpoint de la Phase 1 (même piège que la fois
+# précédente : reprendre un checkpoint où epsilon est déjà au plancher
+# donne très peu d'exploration pour la suite).
+EPSILON_DECROISSANCE = 0.999488
+CAPACITE_BUFFER = 2000  # ~5.5 Go (2.73 Mo/transition x 2000) — RAM Kaggle réelle ~13 Go, marge gardée
+MAJ_CIBLE_TOUS_LES_N_STEPS = 200  # était 20 — beaucoup trop fréquent, annulait l'effet stabilisateur du réseau cible (~3 mises à jour/épisode). 200 donne ~30 mises à jour sur la Phase 1 (6500 steps), plus cohérent avec la pratique standard DQN à cette échelle.
 SAUVER_TOUS_LES_N_EPISODES = 25  # checkpoint disque
 
 
@@ -175,8 +177,10 @@ def charger_checkpoint(modele, optimiseur, device):
     """Reprend un entraînement interrompu. Restaure modèle + optimiseur
     + epsilon + total_steps + épisode de départ. Le buffer de replay
     repart vide (pas sauvegardé) — acceptable : il se remplit vite
-    (capacité 500) et ne contient de toute façon que les dernières
-    transitions, pas un historique qu'on chercherait à préserver.
+    relativement au nombre total d'épisodes visé (voir CAPACITE_BUFFER
+    ci-dessus pour la valeur actuelle), et ne contient de toute façon que
+    les dernières transitions, pas un historique qu'on chercherait à
+    préserver.
 
     Retourne (episode_depart, epsilon, total_steps) — episode_depart=0
     si aucun checkpoint trouvé (premier lancement, pas une erreur)."""
@@ -192,12 +196,45 @@ def charger_checkpoint(modele, optimiseur, device):
     return etat["episode"], etat["epsilon"], etat["total_steps"]
 
 
+def evaluer_politique_greedy(env, modele, device, t_max):
+    """Évaluation SANS exploration (epsilon=0, argmax pur) — donne le vrai
+    niveau actuel de la politique, sans le bruit de l'aléatoire. N'ajoute
+    RIEN au buffer de replay et ne compte pas dans total_steps : c'est une
+    mesure, pas un step d'entraînement."""
+    etat = env.reset()
+    done = False
+    t = 0
+    n_deploiements = 0
+    reward_total = 0.0
+    r_fin = None
+    while not done and t < t_max:
+        masque = env._actions_faisables()
+        action_idx = choisir_action(modele, etat, masque, epsilon=0.0, device=device)
+        action = env.actions[action_idx]
+        if action != "STOP":
+            n_deploiements += 1
+        etat, reward, done, info = env.step(action)
+        reward_total += reward
+        t += 1
+    n_white_final = info.get("n_white")
+    cout_total = info.get("cout_total")
+    r_fin = info.get("r_fin")
+
+    detail = f", cout_total={cout_total:.0f}€" if cout_total is not None else " (t_max atteint sans fin naturelle)"
+    detail_r_fin = f", r_fin={r_fin:.4f}" if r_fin is not None else ""
+    print(f"  === ÉVALUATION GREEDY : {t} steps, {n_deploiements} déploiements, "
+          f"reward_total={reward_total:.4f}{detail_r_fin}, n_white={n_white_final}{detail} ===")
+    return {"n_white": n_white_final, "cout_total": cout_total, "steps": t,
+            "n_deploiements": n_deploiements, "reward_total": reward_total, "r_fin": r_fin}
+
+
 def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
                           n_episodes, t_max, batch_size, gamma,
                           epsilon_debut, epsilon_fin, epsilon_decroissance,
                           maj_cible_tous_les_n_steps,
                           episode_depart=0, total_steps_depart=0,
-                          sauver_tous_les_n_episodes=SAUVER_TOUS_LES_N_EPISODES):
+                          sauver_tous_les_n_episodes=SAUVER_TOUS_LES_N_EPISODES,
+                          evaluer_tous_les_n_episodes=25):
     """episode_depart/total_steps_depart : non-zéro si on reprend depuis
     un checkpoint (charger_checkpoint()). epsilon_debut doit alors déjà
     être la valeur restaurée, pas EPSILON_DEBUT."""
@@ -275,6 +312,9 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
 
         if (episode + 1) % sauver_tous_les_n_episodes == 0:
             sauver_checkpoint(modele, optimiseur, episode + 1, epsilon, total_steps)
+
+        if (episode + 1) % evaluer_tous_les_n_episodes == 0:
+            evaluer_politique_greedy(env, modele, device, t_max)
 
     duree_totale = time.time() - debut_total
     episodes_cette_session = n_episodes - episode_depart

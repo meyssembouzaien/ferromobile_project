@@ -126,9 +126,27 @@ COLONNES_LOG_RL = ["run_id", "episode_id", "t", "scenario", "artificielle",
 
 
 class FerroMobileEnv:
+    # R_couverture/R_qualite/R_succes/R_eff RESCALÉS (4e ajustement du reward) :
+    # mesuré sur données réelles (runs Colab/Kaggle, debug par step) que
+    # |r_t| typique ≈ 0.004, 90e percentile ≈ 0.022, et Σr_t sur un épisode
+    # complet ≈ 0.09-0.1 (= U_T - U_0 par télescopage, cahier des charges
+    # §14). Les anciennes valeurs (R_couverture=100, R_qualite=50) étaient
+    # 500 à 1000x plus grandes que ce Σr_t — le retour total de l'épisode
+    # était donc déterminé presque uniquement par r_fin, quasi aucune
+    # variance venant des actions individuelles (crédit difficile à
+    # attribuer pour le DQN). Nouvelles valeurs choisies pour rester du
+    # même ordre de grandeur que Σr_t typique (~0.1) tout en restant
+    # décisives (R_couverture=1.0 reste ~10x plus grand que Σr_t typique,
+    # donc l'état final domine toujours le choix de politique, sans
+    # écraser complètement le signal dense). Hiérarchie R_couverture=2×
+    # R_qualite préservée exactement comme avant, juste rééchelonnée.
+    # ATTENTION : test_r_fin.py garde ses propres constantes locales
+    # (R_COUVERTURE=100, etc.) — ce sont des valeurs de test pour valider
+    # le MÉCANISME de la formule sur des scénarios jouets, indépendantes
+    # de la config de production ci-dessous. Pas besoin de les synchroniser.
     def __init__(self, scenario="S1", budget=500_000.0, poids=None,
-                 Q_critique=0.5, R_couverture=100.0, R_qualite=50.0,
-                 R_succes=20.0, R_eff=20.0, t_max=200,
+                 Q_critique=0.5, R_couverture=1.0, R_qualite=0.5,
+                 R_succes=0.2, R_eff=0.2, t_max=200,
                  dataset_base_path=DATASET_BASE, dataset_enrichi_path=DATASET_ENRICHI,
                  sauvegarder_deploiements_rl=True, dataset_enrichi_rl_path=None,
                  run_id=None, episode_id=None):
