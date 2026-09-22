@@ -1,13 +1,21 @@
 """
-verifier_points_incouvrables.py — n_white=0 est-il même atteignable ?
+heuristique_gloutonne_multitech.py — Baseline "couverture gloutonne" du §20
 
-Teste les 11 configurations (génération, bande) une par une, sur les
-points déjà identifiés comme résistants au 3G/900 même en ciblage
-individuel dédié (diagnostiquer_budget.py, run précédent). Si un point
-résiste aux 11 combos, c'est un point structurellement incouvrable —
-zone morte physique (terrain/NLOS), pas un problème de RL ni de budget.
+Contrairement à diagnostiquer_budget.py (une seule techno fixée par run),
+choisit à CHAQUE étape la meilleure combinaison (position, génération,
+bande) parmi toutes les options disponibles, selon le critère du §20 :
+réduit le plus de zones blanches par euro dépensé.
 
-Lancer : python verifier_points_incouvrables.py
+Pour rester calculable (pas 156061 candidats testés à chaque étape),
+les positions candidates à une étape donnée sont limitées aux points
+encore blancs eux-mêmes, décalés de quelques mètres dans plusieurs
+directions (même logique que verifier_points_incouvrables.py — jamais
+pile sur le point, cas dégénéré P.1812). Ça reste un choix de conception
+qui pourrait manquer une position légèrement meilleure ailleurs sur la
+grille, mais donne un ordre de grandeur fiable et un test direct de
+"zéro est-il atteignable en pratique, avec plusieurs technos ?".
+
+Lancer : python heuristique_gloutonne_multitech.py
 """
 
 import math
@@ -16,6 +24,7 @@ import os
 import pandas as pd
 
 from simulateur_deploiement import simuler_deploiement
+from cost_model import get_total_cost
 from prepare_data import TECH_PROFILES
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,13 +34,10 @@ DATASET_ENRICHI = os.path.join(BASE_DIR, "data", "processed", "dataset_enrichi.c
 
 SCENARIO = "S1"
 D_COV = 1.0
+BUDGET_MAX = 10_000_000.0  # même budget que le RL, pour une comparaison équitable
 DISTANCE_ANTENNE_M = 100
-DIRECTIONS_DEG = [0, 45, 90, 135, 180, 225, 270, 315]  # 8 directions, pas une seule
-
-# Points qui ont échoué aux 11 technos EN UNE SEULE direction (45°) —
-# on vérifie ici si c'est un vrai obstacle physique (échoue dans TOUTES
-# les directions) ou juste cette direction précise qui était bloquée.
-POINTS_A_TESTER = [301, 388, 391, 401, 413, 441, 455, 1195]
+DIRECTIONS_DEG = [0, 90, 180, 270]  # 4 directions par point blanc, pas 8 — pour rester calculable
+GENERATIONS_EXCLUES = {"2G"}  # même exclusion que l'espace d'action RL (§10, jamais couvrant)
 
 
 def decaler_gps(lat, lon, distance_m, direction_deg):
@@ -49,56 +55,74 @@ def main():
 
     df_points = df_base[["point_id", "lat", "lon", "altitude_m", "vegetation", "in_tunnel"]].drop_duplicates("point_id")
     df_meteo = df_scenario[["point_id", "pluie_mm_h"]].drop_duplicates("point_id")
+    points_hors_tunnel = set(df_points[~df_points["in_tunnel"]]["point_id"])
+    n_total = len(points_hors_tunnel)
 
-    combos = sorted(TECH_PROFILES.keys())
-    print(f"Test de {len(POINTS_A_TESTER)} points x {len(DIRECTIONS_DEG)} directions x {len(combos)} configurations radio\n")
+    debit_reel = df_scenario[~df_scenario["in_tunnel"]].groupby("point_id")["debit_adj_mbps"].max()
+    debit_courant = debit_reel.reindex(list(points_hors_tunnel)).fillna(0.0)
 
-    points_totalement_incouvrables = []
+    combos = sorted((g, b) for g, b in TECH_PROFILES.keys() if g not in GENERATIONS_EXCLUES)
 
-    for pid in POINTS_A_TESTER:
-        point = df_points[df_points["point_id"] == pid]
-        if point.empty:
-            print(f"point_id={pid} : introuvable dans le dataset, ignoré")
-            continue
-        point = point.iloc[0]
+    sites_deja_presents = set()  # simplifié : traite tout comme un nouveau site (coût pessimiste, cohérent avec diagnostiquer_budget.py)
+    budget_restant = BUDGET_MAX
+    cout_total = 0.0
+    n_sites = 0
 
-        meilleur_debit = 0.0
-        meilleure_config = None
-        for direction in DIRECTIONS_DEG:
-            lat_ant, lon_ant = decaler_gps(point["lat"], point["lon"], DISTANCE_ANTENNE_M, direction)
-            for gen, bande in combos:
-                resultats = simuler_deploiement(
-                    lat_ant, lon_ant, gen, bande, df_points, df_meteo,
-                )
-                cible = [r for r in resultats if r["point_id"] == pid]
-                if cible:
-                    debit = cible[0]["debit_adj_mbps"]
-                    if debit > meilleur_debit:
-                        meilleur_debit, meilleure_config = debit, (gen, bande, f"{direction}°")
+    print(f"Départ : n_white={int((debit_courant < D_COV).sum())} / {n_total}, budget={BUDGET_MAX:.0f}€\n")
 
-        couvert = meilleur_debit >= D_COV
-        statut = f"COUVERT par {meilleure_config} ({meilleur_debit:.2f} Mbps)" if couvert \
-            else f"INCOUVRABLE dans les {len(DIRECTIONS_DEG)} directions testées (meilleur essai : {meilleur_debit:.2f} Mbps)"
-        print(f"point_id={pid} : {statut}")
+    while True:
+        points_blancs = df_points[
+            df_points["point_id"].isin(points_hors_tunnel)
+            & (df_points["point_id"].map(debit_courant) < D_COV)
+        ]
+        n_white = len(points_blancs)
+        if n_white == 0:
+            print(f"\n>>> ZÉRO ZONE BLANCHE ATTEINTE : {n_sites} sites, {cout_total:.0f}€ dépensés <<<")
+            break
 
-        if not couvert:
-            points_totalement_incouvrables.append(pid)
+        meilleur_ratio = 0.0
+        meilleure_action = None  # (lat, lon, gen, bande, cout, points_couverts_set)
 
-    print(f"\n{'=' * 60}")
-    if points_totalement_incouvrables:
-        print(f"{len(points_totalement_incouvrables)}/{len(POINTS_A_TESTER)} points RÉSISTENT "
-              f"aux 11 technologies, même en ciblage individuel dédié :")
-        print(points_totalement_incouvrables)
-        print("\n-> n_white=0 est probablement INATTEIGNABLE avec l'espace d'action actuel.")
-        print("   Ce ne sont pas des points isolés testés au hasard : ce sont les points")
-        print("   qui résistaient déjà au 3G/900 seul. S'ils résistent aussi aux 10 autres")
-        print("   technologies, c'est une zone morte physique (terrain/NLOS structurel),")
-        print("   pas un problème de politique RL ni de budget.")
-    else:
-        print("Tous les points testés sont couvrables par au moins une technologie.")
-        print("n_white=0 reste théoriquement atteignable avec la bonne combinaison —")
-        print("le problème est alors de trouver quelle techno utiliser où, ce qui est")
-        print("exactement ce que le RL doit apprendre à faire.")
+        for point in points_blancs.itertuples():
+            for direction in DIRECTIONS_DEG:
+                lat_ant, lon_ant = decaler_gps(point.lat, point.lon, DISTANCE_ANTENNE_M, direction)
+                for gen, bande in combos:
+                    cout = get_total_cost((round(lat_ant, 4), round(lon_ant, 4)), gen, bande, sites_deja_presents)
+                    if cout > budget_restant:
+                        continue
+                    resultats = simuler_deploiement(lat_ant, lon_ant, gen, bande, df_points, df_meteo)
+                    nouveaux_couverts = {
+                        r["point_id"] for r in resultats
+                        if r["point_id"] in points_hors_tunnel
+                        and r["debit_adj_mbps"] >= D_COV
+                        and debit_courant.get(r["point_id"], 0.0) < D_COV
+                    }
+                    if not nouveaux_couverts:
+                        continue
+                    ratio = len(nouveaux_couverts) / cout
+                    if ratio > meilleur_ratio:
+                        meilleur_ratio = ratio
+                        meilleure_action = (lat_ant, lon_ant, gen, bande, cout, nouveaux_couverts)
+
+        if meilleure_action is None:
+            print(f"\n>>> BLOQUÉ : aucune action améliorante trouvée dans le budget restant "
+                  f"({budget_restant:.0f}€). n_white={n_white} restant. <<<")
+            break
+
+        lat_ant, lon_ant, gen, bande, cout, nouveaux_couverts = meilleure_action
+        for pid in nouveaux_couverts:
+            debit_courant[pid] = D_COV  # marqué couvert (valeur exacte non nécessaire pour ce diagnostic)
+        sites_deja_presents.add((round(lat_ant, 4), round(lon_ant, 4)))
+        budget_restant -= cout
+        cout_total += cout
+        n_sites += 1
+
+        print(f"  site {n_sites} : {gen}/{bande} -> {len(nouveaux_couverts)} points couverts, "
+              f"{cout:.0f}€, budget restant={budget_restant:.0f}€, n_white={n_white - len(nouveaux_couverts)}")
+
+        if budget_restant <= 0:
+            print(f"\n>>> BUDGET ÉPUISÉ : {n_sites} sites, n_white={n_white - len(nouveaux_couverts)} restant <<<")
+            break
 
 
 if __name__ == "__main__":
