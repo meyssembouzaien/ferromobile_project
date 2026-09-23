@@ -89,14 +89,24 @@ def main():
             print(f"\n>>> ZÉRO ZONE BLANCHE ATTEINTE : {n_sites} sites, {cout_total:.0f}€ dépensés <<<", flush=True)
             break
 
-        # Cellules candidates : celles du corridor contenant au moins un
-        # point encore blanc — dédoublonnées (plusieurs points blancs
-        # peuvent partager la même cellule de 250m).
+        # Cellules candidates : la cellule de chaque point blanc, PLUS ses
+        # 8 voisines (grille 3x3) — pas une seule position par point.
+        # Sans ça, un point dont la cellule précise a un obstacle de
+        # terrain (LOS bloqué) semble "impossible à couvrir" alors qu'une
+        # cellule juste à côté fonctionnerait — déjà rencontré une fois
+        # avec verifier_points_incouvrables.py (une seule direction
+        # testée -> faux blocages ; plusieurs -> tout se débloque).
         candidats_cellules = set()
         for point in points_blancs.itertuples():
             c = grille.gps_vers_cellule(point.lat, point.lon)
-            if c is not None and grille.corridor_mask[c[0], c[1]]:
-                candidats_cellules.add(c)
+            if c is None:
+                continue
+            ix0, iy0 = c
+            for dix in (-1, 0, 1):
+                for diy in (-1, 0, 1):
+                    ix, iy = ix0 + dix, iy0 + diy
+                    if 0 <= ix < grille.nx and 0 <= iy < grille.ny and grille.corridor_mask[ix, iy]:
+                        candidats_cellules.add((ix, iy))
 
         print(f"  ({n_white} points blancs -> {len(candidats_cellules)} cellules candidates x "
               f"{len(combos)} technos = {len(candidats_cellules) * len(combos)} combinaisons "
