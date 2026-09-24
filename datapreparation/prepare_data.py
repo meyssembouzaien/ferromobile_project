@@ -1,18 +1,16 @@
 """
-prepare_data.py — Étape 2 : Prétraitement et calcul de couverture réseau
-==========================================================================
-Entrée  : data/raw/{ligne_gps.csv, antennes_anfr.csv, tunnels.csv}
-Sortie  : data/processed/dataset_base.csv
+prepare_data.py : étape 2, prétraitement et couverture réseau
+Entrée : data/raw/{ligne_gps.csv, antennes_anfr.csv, tunnels.csv}
+Sortie : data/processed/dataset_base.csv
 
-Path loss model: ITU-R P.1812 (crc-covlib) only. No analytical fallback.
-If the library fails to load, the script exits — it does not silently
-degrade to a less accurate model.
+Path loss : ITU-R P.1812 (crc-covlib) uniquement, pas de modèle de repli.
 """
 
 import math
 import os
 import sys
 import time
+import zlib
 import argparse
 import numpy as np
 import pandas as pd
@@ -38,6 +36,7 @@ LANDCOVER_DIR    = os.path.join(INPUT_DIR, "landcover")
 TOPO_URL   = "https://api.opentopodata.org/v1/eudem25m"
 TOPO_BATCH = 100
 
+# ── Chargement de crc-covlib (arrêt si indisponible) ──
 _CRC_AVAILABLE = False
 covlib = None
 _CrcSim = None
@@ -76,6 +75,7 @@ _TERRAIN_AVAILABLE   = (os.path.isdir(TERRAIN_DATA_DIR)
 _LANDCOVER_AVAILABLE = (os.path.isdir(LANDCOVER_DIR)
                         and bool(os.listdir(LANDCOVER_DIR)))
 
+# Catégories de clutter P.1812 (forêt légère et dense = même catégorie)
 _P1812_CLUTTER = {}
 _TERR_ELEV_SRTM3 = None
 try:
@@ -98,6 +98,7 @@ for _cand in ["TerrainElevDataSource", "TerrainElevSource", "ElevDataSource"]:
 
 TRONCON_KM_MAX = 40.0
 
+# (portée km, rtt_min, rtt_max, débit_max, débit_min, impact_vitesse dB, ber_ref, pente, type)
 TECH_PROFILES = {
     ("2G",   900): (20,   650, 1000, 0.24,  0.05, 3.0,  1e-2, -0.21, "lin"),
     ("3G",   900): (18.5, 120, 160,  1.3,   1.0,  2.0,  1e-3, -0.20, "lin"),
@@ -120,19 +121,13 @@ NOISE_FIGURE_DB = 7.0
 SNR_MAX_DB_PER_TECH = {"2G": 22.0, "3G": 28.0, "4G": 32.0, "5G": 35.0}
 SNR_MAX_DB = 35.0
 BITS_PER_PKT = 400
-# Hauteur du récepteur (véhicule) au-dessus du sol. Doit être la même valeur
-# pour P.1812 (_path_loss_p1812) et pour le test LOS (check_los_binaire),
-# sinon les deux modèles ne raisonnent pas sur le même point physique.
+
+# Hauteur du véhicule : identique pour P.1812 et pour le test LOS
 RECEIVER_HEIGHT_M = 4.0
 
 CODING_GAIN_DB = {"2G": 2.0, "3G": 4.0, "4G": 6.0, "5G": 8.0}
 
-# ── Seuil de couverture minimale (zone blanche) ──
-# Seuil commun à toutes les générations, débit seul (voir cahier des charges §6).
-# IMPORTANT : cette valeur doit rester identique dans prepare_data.py ET
-# enrich_data.py. Ne pas utiliser SNR/RTT ni de seuil par génération pour
-# définir une zone blanche : ça, c'est qos1 qui s'en charge (qualité, pas
-# couverture).
+# Seuil de zone blanche (débit seul). Doit être identique dans enrich_data.py.
 DEBIT_COUVERTURE_MBPS = 1.0
 
 TUNNEL_BUFFER_M = 50
@@ -146,12 +141,12 @@ CORRIDOR_RAYON_KM = 10.0
 
 TOP_K_PAR_GENERATION = {"2G": 3, "3G": 6, "4G": 8, "5G": 8}
 
+# Écart-type du shadowing par génération (dB, avant facteur 0.6)
+SIGMA_SHADOWING_DB = {"2G": 1.2, "3G": 1.5, "4G": 2.0, "5G": 2.5}
+
 _ELEV_CACHE      = {}
 _ELEV_CACHE_FILE = os.path.join(BASE_DIR, "data", "cache", "elev_cache.json")
-# Seule source d'aléatoire qui reste dans le modèle : la variabilité radio
-# (shadowing) autour du SNR. Le BER redevient une fonction déterministe du
-# SNR, et la dégradation vitesse est déterministe elle aussi (plus de RNG).
-_RNG_DELTA = np.random.default_rng(123)
+
 
 def _load_elev_cache():
     import json as _j
@@ -166,6 +161,7 @@ def _load_elev_cache():
         except Exception as e:
             print(f"  ⚠ Cache illisible : {e}")
 
+
 def _save_elev_cache():
     import json as _j
     os.makedirs(os.path.dirname(_ELEV_CACHE_FILE), exist_ok=True)
@@ -173,13 +169,16 @@ def _save_elev_cache():
     with open(_ELEV_CACHE_FILE, "w") as f:
         _j.dump(raw, f)
 
+
 _load_elev_cache()
 
 _dem_dataset   = None
 _dem_transform = None
 _dem_checked   = False
 
+
 def _init_dem():
+    """Ouvre le DEM local une seule fois."""
     global _dem_dataset, _dem_transform, _dem_checked
     if _dem_dataset is not None:
         return True
@@ -209,7 +208,9 @@ def _init_dem():
         print(f"  ⚠ Échec ouverture DEM local ({e})")
         return False
 
+
 def _get_elevations_dem_batch(lats, lons):
+    """Altitudes : cache, puis DEM local, puis API OpenTopoData."""
     import requests as _req
 
     n = len(lats)
@@ -275,6 +276,7 @@ def _get_elevations_dem_batch(lats, lons):
 
     return result
 
+
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -282,6 +284,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
          + math.cos(phi1) * math.cos(phi2)
          * math.sin(math.radians(lon2 - lon1) / 2) ** 2)
     return R * 2 * math.asin(math.sqrt(max(0.0, min(1.0, a))))
+
 
 def haversine_km_vec(lat1, lon1, lat2_arr, lon2_arr):
     R = 6371.0
@@ -292,6 +295,7 @@ def haversine_km_vec(lat1, lon1, lat2_arr, lon2_arr):
     a = np.sin(dphi / 2.0) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlmb / 2.0) ** 2
     return R * 2.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
 
+
 def normalize_generation(gen_raw):
     g = str(gen_raw).strip().upper()
     if g in ("GSM", "2G", "EDGE"):         return "2G"
@@ -300,6 +304,7 @@ def normalize_generation(gen_raw):
     if g in ("NR", "5G", "5GNR", "NR5G"): return "5G"
     return g
 
+
 def get_profile(generation, bande_mhz):
     try:
         bande = int(float(bande_mhz))
@@ -307,10 +312,13 @@ def get_profile(generation, bande_mhz):
         return DEFAULT_PROFILE
     return TECH_PROFILES.get((normalize_generation(generation), bande), DEFAULT_PROFILE)
 
+
 def get_portee_km(generation, bande_mhz):
     return get_profile(generation, bande_mhz)[0]
 
+
 def _get_elevation(lat, lon, df_fallback):
+    """Altitude d'un point. Repli : point de trajet le plus proche."""
     key = (round(lat, 4), round(lon, 4))
     if key in _ELEV_CACHE:
         return _ELEV_CACHE[key]
@@ -322,6 +330,7 @@ def _get_elevation(lat, lon, df_fallback):
     _ELEV_CACHE[key] = alt
     return alt
 
+
 _ESA_TO_VEG = {
     10: "foret_dense", 20: "foret_legere", 30: "plaine",  40: "plaine",
     50: "urbain",      60: "plaine",       70: "plaine",  80: "plaine",
@@ -329,6 +338,7 @@ _ESA_TO_VEG = {
 }
 _wc_dataset = _wc_transform = None
 _veg_cache: dict = {}
+
 
 def _init_worldcover():
     global _wc_dataset, _wc_transform
@@ -349,7 +359,9 @@ def _init_worldcover():
     except Exception:
         return False
 
+
 def get_vegetation(lat, lon, distance_km=None):
+    """Végétation ESA WorldCover. Repli : règle par distance le long de la ligne."""
     key = (round(lat, 4), round(lon, 4))
     if key in _veg_cache:
         return _veg_cache[key]
@@ -372,7 +384,9 @@ def get_vegetation(lat, lon, distance_km=None):
     _veg_cache[key] = veg
     return veg
 
+
 def resample_ligne(df_ligne, step_m=20):
+    """Rééchantillonne le tracé à pas constant."""
     lats = df_ligne["lat"].values
     lons = df_ligne["lon"].values
     alts = df_ligne["altitude_m"].values
@@ -388,7 +402,9 @@ def resample_ligne(df_ligne, step_m=20):
         "distance_km": np.round(targets, 4),
     })
 
+
 def mark_tunnels(df_ligne, df_tunnels):
+    """Marque les points en tunnel (avec une marge de TUNNEL_BUFFER_M)."""
     lats = df_ligne["lat"].values
     lons = df_ligne["lon"].values
     seg_km   = haversine_km_vec(lats[:-1], lons[:-1], lats[1:], lons[1:])
@@ -417,9 +433,11 @@ def mark_tunnels(df_ligne, df_tunnels):
 
     return in_tunnel
 
+
 def check_los_binaire(pt_lat, pt_lon, pt_alt,
                       ant_lat, ant_lon, ant_alt_abs,
                       df_elev):
+    """True si le relief ne coupe pas la ligne antenne -> véhicule."""
     dist_km = haversine_km(pt_lat, pt_lon, ant_lat, ant_lon)
     if dist_km < 0.05:
         return True
@@ -449,15 +467,11 @@ def check_los_binaire(pt_lat, pt_lon, pt_alt,
             elevations[nans] = np.interp(x[nans], x[~nans], elevations[~nans])
             elevations[np.isnan(elevations)] = 0.0
 
-    # Antenne : on utilise l'altitude absolue déjà calculée par l'appelant
-    # (sol + hauteur du mât), pas une ré-estimation locale du sol ici, pour
-    # éviter deux sources d'altitude différentes pour le même point.
-    ant_elev  = float(ant_alt_abs)
-    # Récepteur (véhicule) à la même hauteur que dans P.1812 (RECEIVER_HEIGHT_M),
-    # sinon le test LOS et le calcul P.1812 ne visent pas le même point physique.
-    traj_elev = float(elevations[-1]) + RECEIVER_HEIGHT_M
+    ant_elev  = float(ant_alt_abs)                          # sol + mât, fourni par l'appelant
+    traj_elev = float(elevations[-1]) + RECEIVER_HEIGHT_M   # même hauteur que P.1812
     los_heights = np.linspace(ant_elev, traj_elev, num_points)
 
+    # Courbure terrestre (k = 4/3)
     Dm = dist_km * 1000.0
     s  = np.linspace(0.0, Dm, num_points)
     curvature = (s * (Dm - s)) / (2.0 * LOS_RE_EFFECTIVE)
@@ -471,8 +485,10 @@ def check_los_binaire(pt_lat, pt_lon, pt_alt,
 
     return bool(los_clear)
 
+
 def _path_loss_p1812(pt_lat, pt_lon, ant_lat, ant_lon,
                      ant_height_agl_m, freq_mhz, vegetation):
+    """Path loss P.1812 en dB. None si le calcul échoue ou sort de [50, 280]."""
     try:
         sim = _CrcSim()
         sim.SetTransmitterLocation(ant_lat, ant_lon)
@@ -508,22 +524,22 @@ def _path_loss_p1812(pt_lat, pt_lon, ant_lat, ant_lon,
     except Exception:
         return None
 
+
 def snr_from_path_loss(path_loss_db, gen_norm):
     bw    = BW_NOISE_MHZ.get(gen_norm, 5.0)
     noise = -174 + 10*math.log10(bw*1e6) + NOISE_FIGURE_DB
     snr_raw = P_TX_DBM.get(gen_norm, 43) - path_loss_db - noise
     return round(min(snr_raw, SNR_MAX_DB_PER_TECH.get(gen_norm, SNR_MAX_DB)), 2)
 
+
 def _erfc_approx(x):
     t = 1.0 / (1.0 + 0.3275911*abs(x))
     return (0.254829592*t - 0.284496736*t**2 + 1.421413741*t**3
             - 1.453152027*t**4 + 1.061405429*t**5) * math.exp(-x*x)
 
+
 def ber_physique(snr_db, gen_norm):
-    """BER analytique par modulation (Murota-Hirade 1981 pour GMSK).
-    Fonction déterministe du SNR : même SNR -> même BER. La variabilité
-    du canal est déjà modélisée en amont, sur le SNR (voir delta_snr dans
-    calc_metrics), pas ajoutée une deuxième fois ici."""
+    """BER analytique par modulation. Déterministe : même SNR -> même BER."""
     snr_lin = 10 ** (max(-10.0, min(50.0, snr_db)) / 10)
     if gen_norm == "2G":
         ber = 0.5    * _erfc_approx(math.sqrt(max(0.0, 0.68*snr_lin)))
@@ -535,20 +551,33 @@ def ber_physique(snr_db, gen_norm):
         ber = (7/24) * _erfc_approx(math.sqrt(max(0.0, snr_lin/42)))
     return round(max(1e-6, ber), 12)
 
+
 def calc_debit_empirique(dist_km, portee_km, debit_max, debit_min):
-    """Interpolation linéaire entre débit_max (à l'antenne) et débit_min
-    (à la portée nominale). Même formule pour toutes les générations."""
+    """Débit : interpolation linéaire entre débit_max et débit_min selon la distance."""
     d = max(dist_km, 0.0)
     debit = debit_max - (debit_max - debit_min) * d / portee_km
     return round(max(debit_min, debit), 4)
+
 
 def calc_rtt_empirique(dist_km, portee_km, rtt_min, rtt_max):
     ratio = min(1.0, max(0.0, dist_km / portee_km))
     return round(rtt_min + ratio * (rtt_max - rtt_min), 1)
 
+
+def _delta_snr_deterministe(pt_lat, pt_lon, ant_lat, ant_lon, gen_norm, freq_mhz):
+    """Shadowing d'un lien, en dB. Même lien -> même valeur, à chaque appel."""
+    # CORRECTION : avant, un tirage global (_RNG_DELTA) changeait à chaque
+    # simulation. Le greedy et son replay ne voyaient donc pas les mêmes liens.
+    cle = f"{pt_lat:.6f},{pt_lon:.6f},{ant_lat:.6f},{ant_lon:.6f},{gen_norm},{freq_mhz}"
+    rng = np.random.default_rng(zlib.crc32(cle.encode()))   # crc32 : stable entre sessions
+    sigma = SIGMA_SHADOWING_DB.get(gen_norm, 1.5) * 0.6
+    return round(max(-6.0, min(6.0, float(rng.normal(0.0, sigma)))), 3)
+
+
 def calc_metrics(dist_km, generation, bande_mhz, vegetation, los_category,
                  vitesse_kmh=80.0, pt_lat=None, pt_lon=None,
                  ant_lat=None, ant_lon=None, ant_mat_m=None):
+    """Métriques radio d'un lien antenne -> point."""
     prof = get_profile(generation, bande_mhz)
     portee_km, rtt_min, rtt_max, debit_max, debit_min, impact_vitesse, _, _, _ = prof
 
@@ -560,9 +589,8 @@ def calc_metrics(dist_km, generation, bande_mhz, vegetation, los_category,
     d        = max(dist_km, 0.05)
     gen_norm = normalize_generation(generation)
 
+    # Tunnel : pas de lien radio
     if los_category == 0:
-        # Tunnel : pas de lien radio, valeurs non applicables. ber=1.0 = perte
-        # totale ; delta_ber=0.0 car il n'y a pas de codage à évaluer ici.
         return (None, float("nan"), -99.0, 0.0,
                 float("nan"), float("nan"), 1.0, 0.0,
                 impact_vitesse, 0.0, "TUNNEL")
@@ -576,33 +604,20 @@ def calc_metrics(dist_km, generation, bande_mhz, vegetation, los_category,
 
     snr_base = snr_from_path_loss(perte_db, gen_norm)
 
-    # ── Dégradation vitesse (effet Doppler, ICI inter-porteuses, erreurs
-    # d'estimation canal). Continue en fonction de la vitesse (pas de seuil
-    # brutal à 50 km/h), toujours ≥ 0 (la vitesse ne peut qu'abîmer le SNR).
-    # impact_vitesse est plus élevé pour 2G (3.0 dB) que 5G (0.6 dB) car les
-    # sous-porteuses OFDM larges (4G/5G) tolèrent mieux le Doppler que les
-    # modulations à bande étroite (GMSK/QPSK).
+    # Perte due à la vitesse (Doppler), nulle sous 50 km/h
     delta_vitesse = round(impact_vitesse * max(0.0, vitesse_kmh - 50.0) / 100.0, 4)
 
-    # ── Variabilité radio (shadowing) : incertitude du canal non capturée
-    # par P.1812 seul, modélisée en loi normale bornée à ±6 dB. C'est une
-    # hypothèse de modélisation, pas une mesure terrain (à documenter comme
-    # telle dans le mémoire).
-    _sigma = {"2G": 1.2, "3G": 1.5, "4G": 2.0, "5G": 2.5}.get(gen_norm, 1.5)
-    delta_snr = round(max(-6.0, min(6.0, float(_RNG_DELTA.normal(0.0, _sigma*0.6)))), 3)
+    # Shadowing : fixé par le lien (voir _delta_snr_deterministe)
+    delta_snr = _delta_snr_deterministe(pt_lat, pt_lon, ant_lat, ant_lon, gen_norm, freq_mhz)
 
     snr_adjusted = round(snr_base - delta_vitesse + delta_snr, 2)
     snr_adjusted = min(snr_adjusted, SNR_MAX_DB_PER_TECH.get(gen_norm, SNR_MAX_DB))
 
-    # Débit empirique calibré, fonction de la distance uniquement. P.1812 sert
-    # à la propagation (SNR/BER/QoS), pas au débit : les deux sont des modèles
-    # séparés et volontairement indépendants (choix méthodologique validé).
+    # Débit et RTT : fonction de la distance seulement (P.1812 sert au SNR/BER)
     debit_adj = calc_debit_empirique(d, portee_km, debit_max, debit_min)
     rtt       = calc_rtt_empirique(d, portee_km, rtt_min, rtt_max)
 
-    # BER sans codage (référence), puis BER effectif avec le gain de codage
-    # de la génération. delta_ber = ce que le codage a réellement apporté,
-    # donc une vraie quantité dérivée du modèle, pas un facteur arbitraire.
+    # BER brut, puis BER avec gain de codage
     ber       = ber_physique(snr_adjusted, gen_norm)
     ber_eff   = ber_physique(snr_adjusted + CODING_GAIN_DB.get(gen_norm, 0.0), gen_norm)
     delta_ber = round(ber - ber_eff, 12)
@@ -613,28 +628,29 @@ def calc_metrics(dist_km, generation, bande_mhz, vegetation, los_category,
     return (perte_db, snr_base, snr_adjusted, debit_adj,
             rtt, pkt_loss, ber, delta_ber, delta_vitesse, delta_snr, "P1812")
 
+
 def creer_tampon(line_wgs84, rayon_km):
+    """Tampon de rayon_km autour de la ligne (calculé en Lambert 93)."""
     to_m   = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:2154", always_xy=True)
     to_wgs = pyproj.Transformer.from_crs("EPSG:2154", "EPSG:4326", always_xy=True)
     line_m = shapely.ops.transform(lambda x, y: to_m.transform(x, y), line_wgs84)
     buf_m  = line_m.buffer(rayon_km * 1000)
     return shapely.ops.transform(lambda x, y: to_wgs.transform(x, y), buf_m)
 
+
 def build_point_antenna_association(df_ligne, df_antennes, corridor_km=CORRIDOR_RAYON_KM):
-    # Rayon effectif = max(corridor, portée max de l'antenne)
-    # Ainsi une antenne 2G/900 (portée 20km) peut couvrir même si à 15km du trajet
+    """Paires (point, antenne) à portée, limitées à TOP_K par génération."""
+    # Présélection large (portée max), puis filtre fin par portée de chaque antenne
     rayon_max_ant = df_antennes["portee_km"].max()
     rayon_effectif = max(corridor_km, rayon_max_ant)
 
     line = LineString(df_ligne[["lon", "lat"]].to_numpy())
-    zone_tampon = creer_tampon(line, rayon_effectif)   # au lieu de corridor_km
+    zone_tampon = creer_tampon(line, rayon_effectif)
     ant_gdf = gpd.GeoDataFrame(
         df_antennes, geometry=gpd.points_from_xy(df_antennes["lon"], df_antennes["lat"]),
         crs="EPSG:4326")
     antennes_proches = ant_gdf[ant_gdf.intersects(zone_tampon)]
     print(f"  Tampon {rayon_effectif}km sur la ligne : {len(antennes_proches)}/{len(df_antennes)} antennes")
-
-    # ... le reste ne change pas, le filtre fin par portée continue de faire son travail
 
     traj_xy   = df_ligne[["lon", "lat"]].to_numpy(dtype=float)
     point_ids = df_ligne["point_id"].to_numpy()
@@ -664,6 +680,7 @@ def build_point_antenna_association(df_ligne, df_antennes, corridor_km=CORRIDOR_
                           include_groups=False))
     assoc = assoc.reset_index(level=["point_id", "generation"])
     return assoc.sort_values(["point_id", "_dist"]).drop(columns="generation")
+
 
 def main(step_m=20, corridor_rayon_km=CORRIDOR_RAYON_KM, vitesse_kmh=80.0):
     print("=" * 70)
@@ -848,6 +865,7 @@ def main(step_m=20, corridor_rayon_km=CORRIDOR_RAYON_KM, vitesse_kmh=80.0):
         if col in df_out.columns:
             df_out[col] = df_out[col].astype(str)
 
+    # Points sans aucun lien valide : ligne vide, zone blanche explicite
     pts_avec_lien = set(df_out["point_id"]) if len(df_out) > 0 else set()
     pts_orphelins = df_ligne[~df_ligne["point_id"].isin(pts_avec_lien)]
     if len(pts_orphelins) > 0:
@@ -889,15 +907,7 @@ def main(step_m=20, corridor_rayon_km=CORRIDOR_RAYON_KM, vitesse_kmh=80.0):
     print(f"  Modèles radio           : {model_counts}")
 
     if len(df_out) > 0:
-        # Zone blanche = aucune cellule (hors tunnel) n'atteint DEBIT_COUVERTURE_MBPS.
-        # Seuil de débit seul, identique à enrich_data.py. On ne mélange pas ici
-        # SNR/RTT : ça, c'est la qualité (qos1), pas la couverture minimale.
-        #
-        # Les tunnels restent dans le dataset (utiles pour l'EDA) mais sont
-        # hors périmètre de l'étude de couverture : une antenne macro ne peut
-        # pas corriger un tunnel, donc les compter en zone_blanche fausserait
-        # N_white avec un plancher qu'aucun placement ne peut jamais réduire.
-        # zone_blanche = NA pour ces points, pas 1.
+        # Zone blanche : aucun lien hors tunnel >= DEBIT_COUVERTURE_MBPS. Tunnels = NA.
         hors_tunnel = df_out[~df_out["in_tunnel"]]
         debit_max_par_point = hors_tunnel.groupby("point_id")["debit_adjusted"].max()
 
