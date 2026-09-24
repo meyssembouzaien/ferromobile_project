@@ -89,53 +89,59 @@ def main():
             print(f"\n>>> ZÉRO ZONE BLANCHE ATTEINTE : {n_sites} sites, {cout_total:.0f}€ dépensés <<<", flush=True)
             break
 
-        # Cellules candidates : la cellule de chaque point blanc, PLUS ses
-        # 8 voisines (grille 3x3) — pas une seule position par point.
-        # Sans ça, un point dont la cellule précise a un obstacle de
-        # terrain (LOS bloqué) semble "impossible à couvrir" alors qu'une
-        # cellule juste à côté fonctionnerait — déjà rencontré une fois
-        # avec verifier_points_incouvrables.py (une seule direction
-        # testée -> faux blocages ; plusieurs -> tout se débloque).
-        candidats_cellules = set()
-        for point in points_blancs.itertuples():
-            c = grille.gps_vers_cellule(point.lat, point.lon)
-            if c is None:
-                continue
-            ix0, iy0 = c
-            for dix in (-1, 0, 1):
-                for diy in (-1, 0, 1):
-                    ix, iy = ix0 + dix, iy0 + diy
-                    if 0 <= ix < grille.nx and 0 <= iy < grille.ny and grille.corridor_mask[ix, iy]:
-                        candidats_cellules.add((ix, iy))
-
-        print(f"  ({n_white} points blancs -> {len(candidats_cellules)} cellules candidates x "
-              f"{len(combos)} technos = {len(candidats_cellules) * len(combos)} combinaisons "
-              f"pour ce site...)", flush=True)
+        # Recherche en 2 temps : d'abord UNE SEULE cellule par point
+        # blanc (rapide, suffisant dans l'immense majorité des cas —
+        # confirmé par le run précédent : 22 sites placés ainsi avant
+        # le moindre blocage). Seulement si RIEN n'est trouvé à ce
+        # niveau, on élargit au voisinage 3x3 (9 cellules), juste pour
+        # cette itération — pas systématiquement à chaque site.
+        def construire_candidats(rayon):
+            candidats = set()
+            for point in points_blancs.itertuples():
+                c = grille.gps_vers_cellule(point.lat, point.lon)
+                if c is None:
+                    continue
+                ix0, iy0 = c
+                for dix in range(-rayon, rayon + 1):
+                    for diy in range(-rayon, rayon + 1):
+                        ix, iy = ix0 + dix, iy0 + diy
+                        if 0 <= ix < grille.nx and 0 <= iy < grille.ny and grille.corridor_mask[ix, iy]:
+                            candidats.add((ix, iy))
+            return candidats
 
         meilleur_ratio = 0.0
         meilleure_action = None  # (ix, iy, gen, bande, cout, points_couverts_set)
 
-        for i, (ix, iy) in enumerate(candidats_cellules):
-            if i % 20 == 0:
-                print(f"    ... cellule {i}/{len(candidats_cellules)} en cours d'évaluation", flush=True)
-            lat_ant, lon_ant = grille.cellule_vers_gps(ix, iy)
-            for gen, bande in combos:
-                cout = get_total_cost((ix, iy), gen, bande, sites_deja_presents)
-                if cout > budget_restant:
-                    continue
-                resultats = simuler_deploiement(lat_ant, lon_ant, gen, bande, df_points, df_meteo)
-                nouveaux_couverts = {
-                    r["point_id"] for r in resultats
-                    if r["point_id"] in points_hors_tunnel
-                    and r["debit_adj_mbps"] >= D_COV
-                    and debit_courant.get(r["point_id"], 0.0) < D_COV
-                }
-                if not nouveaux_couverts:
-                    continue
-                ratio = len(nouveaux_couverts) / cout
-                if ratio > meilleur_ratio:
-                    meilleur_ratio = ratio
-                    meilleure_action = (ix, iy, gen, bande, cout, nouveaux_couverts)
+        for rayon in (0, 1):  # 0 = juste la cellule du point ; 1 = voisinage 3x3, seulement si besoin
+            candidats_cellules = construire_candidats(rayon)
+            print(f"  (rayon={rayon} : {n_white} points blancs -> {len(candidats_cellules)} cellules candidates x "
+                  f"{len(combos)} technos = {len(candidats_cellules) * len(combos)} combinaisons "
+                  f"pour ce site...)", flush=True)
+
+            for i, (ix, iy) in enumerate(candidats_cellules):
+                if i % 20 == 0:
+                    print(f"    ... cellule {i}/{len(candidats_cellules)} en cours d'évaluation", flush=True)
+                lat_ant, lon_ant = grille.cellule_vers_gps(ix, iy)
+                for gen, bande in combos:
+                    cout = get_total_cost((ix, iy), gen, bande, sites_deja_presents)
+                    if cout > budget_restant:
+                        continue
+                    resultats = simuler_deploiement(lat_ant, lon_ant, gen, bande, df_points, df_meteo)
+                    nouveaux_couverts = {
+                        r["point_id"] for r in resultats
+                        if r["point_id"] in points_hors_tunnel
+                        and r["debit_adj_mbps"] >= D_COV
+                        and debit_courant.get(r["point_id"], 0.0) < D_COV
+                    }
+                    if not nouveaux_couverts:
+                        continue
+                    ratio = len(nouveaux_couverts) / cout
+                    if ratio > meilleur_ratio:
+                        meilleur_ratio = ratio
+                        meilleure_action = (ix, iy, gen, bande, cout, nouveaux_couverts)
+
+            if meilleure_action is not None:
+                break  # trouvé au rayon 0, pas besoin d'élargir
 
         if meilleure_action is None:
             print(f"\n>>> BLOQUÉ : aucune action améliorante trouvée dans le budget restant "
