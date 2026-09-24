@@ -1,67 +1,24 @@
 """
-environment_rl.py — Environnement RL (§13, §14)
-==================================================================
-Orchestre les modules déjà validés, n'en réimplémente aucun :
-grid_config.py, build_state.py, build_state_dynamic.py, trajectory_dp.py,
-simulateur_deploiement.py, cost_model.py, utility.py. Aucun de ces
-fichiers n'est modifié pour construire cet environnement.
+environment_rl.py : environnement RL de FerroMobile (§13, §14 du cahier des charges).
 
-Trois identités de site, jamais unifiées de force (voir guide de codage,
-§6) :
-    - action RL / "déjà déployé" : (ix, iy, g, f)
-    - coût (§12)                 : (ix, iy)
-    - DP / cellule radio (§9)    : GPS exact (x_s, y_s, o, g, f)
+Orchestre les modules déjà validés, sans les réimplémenter :
+grid_config, build_state, build_state_dynamic, trajectory_dp,
+simulateur_deploiement, cost_model, utility.
 
-deploiements_reels ∪ infrastructure_deployee = combinaisons (site,g,f)
-déjà présentes dans I (§13). deploiements_reels est dérivé UNE FOIS à
-reset() depuis le réseau réel (par ant_id, pas point par point — un
-ant_id identifie une infrastructure radio réelle unique dans le
-dataset, §4). Pour l'espace d'action RL, l'opérateur n'est pas une
-dimension de décision (§13 : o ∉ a) : les déploiements réels sont donc
-délibérément PROJETÉS sur (ix,iy,g,f) sans opérateur. Conséquence
-assumée : si deux opérateurs différents ont chacun de la 4G/1800 sur le
-même site réel (même cellule de grille), les deux se fusionnent en une
-seule entrée dans deploiements_reels — cohérent avec le fait que
-l'action RL elle-même ne distingue jamais les opérateurs.
+Trois identités de site, jamais fusionnées :
+    - action RL / déjà déployé : (ix, iy, g, f)
+    - coût (§12)               : (ix, iy)
+    - DP / cellule radio (§9)  : GPS exact (x_s, y_s, o, g, f)
 
-self.actions est restreint aux cellules du corridor (corridor_mask,
-§15) dès la construction, pas filtré dynamiquement dans _est_faisable() :
-ce sont deux concepts différents (espace d'action vs faisabilité
-courante). Les bandes possibles par génération sont dérivées DIRECTEMENT
-des clés de TECH_PROFILES (prepare_data.py) — pas une copie maintenue à
-la main, pour ne jamais diverger si TECH_PROFILES change.
+STOP = action d'indice 0.
+dataset_enrichi.csv n'est jamais modifié. Les déploiements simulés
+peuvent être journalisés dans un CSV séparé, un fichier par run_id.
 
-STOP est représenté par la chaîne "STOP", toujours en première position
-de self.actions (action_id = 0).
-
-JOURNALISATION (dataset_enrichi.csv n'est JAMAIS modifié, lecture seule) :
-chaque déploiement hypothétique simulé pendant un épisode peut être
-journalisé dans un fichier SÉPARÉ, UN PAR run_id (par défaut
-data/processed/dataset_enrichi_rl/run_<run_id>.csv), distinct du
-dataset réel, pour pouvoir inspecter après coup ce que le RL a
-réellement simulé sans jamais risquer de corrompre la version de
-référence en cas d'erreur d'entraînement. Un fichier par run (pas un
-fichier cumulatif partagé) élimine la condition de concurrence entre
-processus qui écriraient en parallèle : deux run_id différents ->
-deux fichiers différents -> jamais deux processus qui écrivent le même
-en-tête au même endroit en même temps. self._resultats_hypo (en
-mémoire) reste la seule source de vérité PENDANT l'épisode — le CSV
-n'est qu'une trace persistante écrite en plus, jamais relue pendant
-l'épisode. Chaque ligne porte run_id + episode_id (un épisode dans ce
-run) + artificielle=True (pour ne jamais confondre avec une mesure
-réelle en relisant le fichier des semaines plus tard). Désactivable via
-sauvegarder_deploiements_rl=False (écrire un CSV à chaque step a un
-coût, à éviter pour un entraînement massif si le log n'est pas
-nécessaire).
-
-CORRECTION (2e patch reward) : _finaliser() appelle maintenant
-compute_r_fin() avec n_total en plus (nouvelle signature de utility.py),
-et EN ARGUMENTS NOMMÉS explicitement — pas positionnels — pour qu'un
-futur changement de signature de compute_r_fin() lève une erreur claire
-("unexpected keyword" ou "missing argument") plutôt qu'un décalage
-silencieux des valeurs (c'est exactement ce qui s'est produit une fois :
-un appel positionnel avec un argument manquant a décalé tous les
-suivants sans erreur explicite immédiate).
+Corrections documentées :
+    - compute_r_fin() appelé en arguments nommés (un appel positionnel
+      avait déjà décalé les arguments sans erreur).
+    - reset() : itertuples() limité aux 8 colonnes utiles (61 colonnes
+      rendaient reset() très lent). Résultat identique.
 """
 
 import os
@@ -89,22 +46,10 @@ DATASET_ENRICHI_RL_DIR = os.path.join(BASE_DIR, "data", "processed", "dataset_en
 D_COV = 1.0
 LAMBDA_H, LAMBDA_O, LAMBDA_T = 0.05, 0.05, 0.05
 
-# Bandes possibles par génération, DÉRIVÉES des clés de TECH_PROFILES
-# (prepare_data.py) — source unique de vérité, §13 : f in F_g, "parmi
-# celles définies pour cette génération dans les profils techniques du
-# pipeline". Ne jamais dupliquer cette liste à la main : si TECH_PROFILES
-# change, cette dérivation suit automatiquement.
-#
-# EXCEPTION EXPLICITE : le 2G est retiré de l'espace d'action. Fait déjà
-# établi (cahier des charges §24) : son débit max (~0.24 Mbps) ne peut
-# JAMAIS dépasser D_cov=1.0, quelle que soit la distance — une action 2G
-# ne peut donc jamais réduire N_white. C'est aussi la techno à la plus
-# grande portée (20km), donc la plus coûteuse à simuler (le plus de
-# points du corridor dans son rayon). La retirer réduit |A| et évite
-# l'action la plus chère à calculer parmi celles qu'on sait déjà inutiles
-# pour l'objectif de couverture — pas un choix arbitraire.
+# 2G exclu : son débit max (0,24 Mbps) n'atteint jamais D_cov
 GENERATIONS_EXCLUES = {"2G"}
 
+# Bandes par génération, dérivées de TECH_PROFILES (source unique)
 BANDES_PAR_GENERATION = {}
 for _gen, _bande in TECH_PROFILES.keys():
     if _gen in GENERATIONS_EXCLUES:
@@ -115,35 +60,19 @@ for _gen in BANDES_PAR_GENERATION:
 
 STOP = "STOP"
 
-# Schéma attendu de dataset_enrichi_rl.csv — utilisé pour détecter si un
-# fichier préexistant à cet emplacement n'est PAS un journal RL généré
-# par ce code (par exemple une copie accidentelle de dataset_enrichi.csv,
-# dont le schéma est complètement différent : ant_id, scenario_id,
-# operateur... au lieu de run_id, episode_id, artificielle...).
+# Colonnes attendues du journal RL (protège contre un mauvais fichier)
 COLONNES_LOG_RL = ["run_id", "episode_id", "t", "scenario", "artificielle",
                     "ix", "iy", "generation", "bande_mhz", "lat_site", "lon_site",
                     "cout_eur", "point_id", "qos", "debit_adj_mbps", "rtt_ms", "ber"]
 
+# Colonnes utilisées pour les cellules réelles de la DP
+COLONNES_CELLULES = ["point_id", "ant_lat", "ant_lon", "operateur", "generation",
+                     "bande_mhz", "qos", "debit_adj_mbps"]
+
 
 class FerroMobileEnv:
-    # R_couverture/R_qualite/R_succes/R_eff RESCALÉS (4e ajustement du reward) :
-    # mesuré sur données réelles (runs Colab/Kaggle, debug par step) que
-    # |r_t| typique ≈ 0.004, 90e percentile ≈ 0.022, et Σr_t sur un épisode
-    # complet ≈ 0.09-0.1 (= U_T - U_0 par télescopage, cahier des charges
-    # §14). Les anciennes valeurs (R_couverture=100, R_qualite=50) étaient
-    # 500 à 1000x plus grandes que ce Σr_t — le retour total de l'épisode
-    # était donc déterminé presque uniquement par r_fin, quasi aucune
-    # variance venant des actions individuelles (crédit difficile à
-    # attribuer pour le DQN). Nouvelles valeurs choisies pour rester du
-    # même ordre de grandeur que Σr_t typique (~0.1) tout en restant
-    # décisives (R_couverture=1.0 reste ~10x plus grand que Σr_t typique,
-    # donc l'état final domine toujours le choix de politique, sans
-    # écraser complètement le signal dense). Hiérarchie R_couverture=2×
-    # R_qualite préservée exactement comme avant, juste rééchelonnée.
-    # ATTENTION : test_r_fin.py garde ses propres constantes locales
-    # (R_COUVERTURE=100, etc.) — ce sont des valeurs de test pour valider
-    # le MÉCANISME de la formule sur des scénarios jouets, indépendantes
-    # de la config de production ci-dessous. Pas besoin de les synchroniser.
+    # R_* rééchelonnés (100/50/20/20 -> 1/0.5/0.2/0.2) pour rester du même
+    # ordre que la somme des r_t (environ 0,1 par épisode). Hiérarchie gardée.
     def __init__(self, scenario="S1", budget=500_000.0, poids=None,
                  Q_critique=0.5, R_couverture=1.0, R_qualite=0.5,
                  R_succes=0.2, R_eff=0.2, t_max=200,
@@ -160,10 +89,8 @@ class FerroMobileEnv:
         self.R_eff = R_eff
         self.t_max = t_max
         self.sauvegarder_deploiements_rl = sauvegarder_deploiements_rl
-        # run_id distingue les entraînements entre eux. Le suffixe uuid4
-        # évite une collision si deux environnements sont créés dans la
-        # même seconde (arrive facilement en lançant plusieurs runs en
-        # parallèle ou via un script qui instancie vite plusieurs envs).
+
+        # Suffixe uuid : évite deux run_id identiques créés dans la même seconde
         self.run_id = run_id if run_id is not None else f"{datetime.now():%Y-%m-%d_%H%M%S}_{uuid4().hex[:8]}"
         self.dataset_enrichi_rl_path = (
             dataset_enrichi_rl_path if dataset_enrichi_rl_path is not None
@@ -179,8 +106,7 @@ class FerroMobileEnv:
         self.points_hors_tunnel = set(self.df_points[~self.df_points["in_tunnel"]]["point_id"])
         self.n_total = len(self.points_hors_tunnel)
 
-        # Espace d'action restreint au corridor (§15), construit une seule
-        # fois — indépendant de l'épisode.
+        # Espace d'action : cellules du corridor x (g, f), construit une fois
         self.actions = [STOP] + [
             (int(ix), int(iy), g, f)
             for ix in range(self.grille.nx) for iy in range(self.grille.ny)
@@ -209,8 +135,9 @@ class FerroMobileEnv:
         df_scenario = self.df_enrichi_complet[self.df_enrichi_complet["scenario_id"] == self.scenario]
         self.df_reel = df_scenario[(~df_scenario["in_tunnel"]) & (df_scenario["ant_id"].notna())]
 
+        # Cellules réelles par point. CORRECTION : 8 colonnes au lieu de 61 (vitesse)
         self._cells_reelles_par_point = {}
-        for pid, lignes in self.df_reel.groupby("point_id"):
+        for pid, lignes in self.df_reel[COLONNES_CELLULES].groupby("point_id"):
             self._cells_reelles_par_point[pid] = [
                 {"cellule": ((round(row.ant_lat, 6), round(row.ant_lon, 6)),
                              row.operateur, row.generation, row.bande_mhz),
@@ -222,6 +149,7 @@ class FerroMobileEnv:
 
         self._resultats_hypo = []
 
+        # Réseau réel projeté sur (ix, iy, g, f), sans opérateur (o n'est pas dans l'action)
         antennes_uniques = self.df_reel[["ant_id", "ant_lat", "ant_lon", "generation", "bande_mhz"]].drop_duplicates("ant_id")
         self.deploiements_reels = set()
         self.sites_deja_presents = set()
@@ -247,9 +175,10 @@ class FerroMobileEnv:
         return self._construire_etat()
 
     # ------------------------------------------------------------------
-    # ÉVALUATION (DP + N_white), factorisée pour reset() et step()
+    # ÉVALUATION (DP + N_white)
     # ------------------------------------------------------------------
     def _fusionner_cells_par_point(self):
+        """Candidats par point : cellules réelles + cellules simulées."""
         cellules_hypo_par_point = {}
         for r in self._resultats_hypo:
             cellules_hypo_par_point.setdefault(r["point_id"], []).append(r)
@@ -267,6 +196,7 @@ class FerroMobileEnv:
 
     @staticmethod
     def _serie_max_par_point(resultats, cle):
+        """Maximum de `cle` par point parmi les résultats simulés."""
         if not resultats:
             return pd.Series(dtype=float)
         return pd.Series(
@@ -284,6 +214,7 @@ class FerroMobileEnv:
         else:
             debit_combine = self.debit_reel_par_point
 
+        # Zone blanche : meilleur débit < D_cov, sur tout le corridor hors tunnel
         debit_sur_corridor = debit_combine.reindex(list(self.points_hors_tunnel))
         n_white = int((debit_sur_corridor.fillna(0) < D_COV).sum())
         n_eval = len(points)
@@ -298,6 +229,7 @@ class FerroMobileEnv:
     # FAISABILITÉ
     # ------------------------------------------------------------------
     def _est_faisable(self, action):
+        """Infaisable si (ix, iy, g, f) existe déjà ou si le budget ne suffit pas."""
         if action == STOP:
             return True
         ix, iy, g, f = action
@@ -313,6 +245,7 @@ class FerroMobileEnv:
     # ÉTAT
     # ------------------------------------------------------------------
     def _construire_etat(self):
+        """État = 27 canaux spatiaux + b_t + progression."""
         canaux_infra = construire_canaux_infrastructure(
             self.grille, self.df_reel, cellules_hypothetiques=self._resultats_hypo_pour_infra())
 
@@ -346,6 +279,7 @@ class FerroMobileEnv:
     # JOURNALISATION
     # ------------------------------------------------------------------
     def _verifier_schema_log_rl(self):
+        """Refuse d'écrire dans un fichier qui n'est pas un journal RL."""
         if not os.path.exists(self.dataset_enrichi_rl_path):
             return
         try:
@@ -358,15 +292,11 @@ class FerroMobileEnv:
                 f"schéma attendu du journal RL.\n"
                 f"Attendu : {sorted(COLONNES_LOG_RL)}\n"
                 f"Trouvé  : {sorted(colonnes_existantes)}\n"
-                "Ce fichier n'est probablement pas un journal RL généré par "
-                "ce code (par exemple une copie de dataset_enrichi.csv). "
-                "Supprime-le ou choisis un autre dataset_enrichi_rl_path — "
-                "ne jamais faire pointer ce chemin vers une copie du réseau "
-                "réel : le schéma est incompatible et l'ajout de lignes "
-                "corromprait le fichier."
+                "Supprime ce fichier ou choisis un autre dataset_enrichi_rl_path."
             )
 
     def _journaliser(self, action, lat_site, lon_site, cout, resultats_sim):
+        """Ajoute les résultats d'un déploiement simulé au journal du run."""
         self._verifier_schema_log_rl()
 
         ix, iy, g, f = action
@@ -396,16 +326,16 @@ class FerroMobileEnv:
     # ------------------------------------------------------------------
     def step(self, action):
         if self.done:
-            raise RuntimeError("step() appelé après done=True — appeler reset() d'abord.")
+            raise RuntimeError("step() appelé après done=True : appeler reset() d'abord.")
         if not self._est_faisable(action):
             raise ValueError(f"Action infaisable : {action}. "
-                              "Le masque de _actions_faisables() doit être appliqué avant argmax.")
+                              "Appliquer le masque de _actions_faisables() avant argmax.")
 
         if action == STOP:
             return self._step_stop()
 
         ix, iy, g, f = action
-        lat, lon = self.grille.cellule_vers_gps(ix, iy)
+        lat, lon = self.grille.cellule_vers_gps(ix, iy)   # antenne au centre de la cellule
 
         resultats_sim = simuler_deploiement(lat, lon, g, f, self.df_points, self.df_meteo_scenario)
         resultats_sim = [r for r in resultats_sim if r["point_id"] in self.points_hors_tunnel]
@@ -430,12 +360,7 @@ class FerroMobileEnv:
         self._dernier_n_eval = n_eval
         self.t += 1
 
-        # Fin forcée : budget épuisé (§14), t_max atteint (garde-fou
-        # d'implémentation), OU couverture complète atteinte (n_white=0) —
-        # ce dernier cas correspond à l'objectif réel "zéro zone blanche,
-        # coût minimal" : une fois atteint, continuer à dépenser ne ferait
-        # que dégrader r_fin (le terme d'efficacité coût diminue avec
-        # cost_total), donc STOP naturel dès que possible.
+        # Fin forcée : plus d'action possible, couverture complète, ou t_max
         aucune_action_deploiement_possible = not any(
             self._est_faisable(a) for a in self.actions if a != STOP)
         couverture_complete = n_white == 0
@@ -450,7 +375,7 @@ class FerroMobileEnv:
     def _finaliser(self, r_t_dernier_step):
         cout_total = self.budget_total - self.budget_restant
 
-        # Arguments NOMMÉS, jamais positionnels — voir docstring du module.
+        # Arguments nommés : un changement de signature lèvera une erreur claire
         r_fin = compute_r_fin(
             n_white=self._dernier_n_white,
             n_total=self.n_total,
