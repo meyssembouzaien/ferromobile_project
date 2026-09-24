@@ -27,3 +27,4 @@ data/raw/*.json
 # Divers
 .DS_Store
 *.log
+placement.zip
