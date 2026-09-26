@@ -210,7 +210,9 @@ def _init_dem():
 
 
 def _get_elevations_dem_batch(lats, lons):
-    """Altitudes : cache, puis DEM local, puis API OpenTopoData."""
+    """Altitudes : cache, puis DEM local, puis API OpenTopoData.
+    Toujours lues au point arrondi à 4 décimales (environ 10 m) :
+    même clé de cache -> même altitude, quel que soit l'ordre des appels."""
     import requests as _req
 
     n = len(lats)
@@ -229,7 +231,10 @@ def _get_elevations_dem_batch(lats, lons):
 
     if _init_dem():
         try:
-            coords = [(lons[i], lats[i]) for i in missing_idx]
+            # CORRECTION : on lit le DEM au point ARRONDI (la clé du cache), pas au
+            # point exact. Sinon la valeur gardée dépend du premier point demandé,
+            # et le résultat dépend de l'ordre des calculs.
+            coords = [(round(lons[i], 4), round(lats[i], 4)) for i in missing_idx]
             nodata = _dem_dataset.nodata
             still_missing = []
             for j, val in enumerate(_dem_dataset.sample(coords)):
@@ -250,7 +255,7 @@ def _get_elevations_dem_batch(lats, lons):
 
     for start in range(0, len(missing_idx), TOPO_BATCH):
         batch_idx = missing_idx[start : start + TOPO_BATCH]
-        locations_str = "|".join(f"{lats[i]},{lons[i]}" for i in batch_idx)
+        locations_str = "|".join(f"{round(lats[i], 4)},{round(lons[i], 4)}" for i in batch_idx)
         try:
             r = _req.get(
                 TOPO_URL,
