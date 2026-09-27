@@ -1,7 +1,7 @@
 """
 verifier_glouton_dans_env.py
-Rejoue les 29 sites du greedy dans FerroMobileEnv.
-Vérifie : QoS finale, r_fin, somme r_t = U_final - U0, effet de la RNG.
+Rejoue les sites du greedy dans FerroMobileEnv, deux fois dans le même processus.
+Mesure : QoS finale, branche de r_fin, stabilité de n_white face au shadowing aléatoire.
 """
 
 from train_dqn import preparer_environnement_colab
@@ -9,34 +9,50 @@ preparer_environnement_colab()  # avant l'import qui charge crc_covlib
 
 from environment_rl import FerroMobileEnv
 
-# les 29 cellules du greedy, dans l'ordre
-SITES = [(40,119),(47,110),(42,114),(42,117),(100,63),(64,105),(59,110),
-         (41,126),(90,85),(45,111),(52,109),(67,101),(43,113),(101,74),
-         (100,64),(84,85),(44,112),(41,125),(41,115),(62,105),(48,109),
-         (40,121),(44,111),(66,102),(40,114),(40,117),(41,116),(88,84),(42,125)]
+# les 26 cellules du greedy, dans l'ordre
+SITES = [(40,119),(47,110),(42,114),(42,117),(100,63),(64,105),(41,126),(59,110),(90,85),
+         (52,109),(43,112),(67,101),(101,74),(45,111),(41,115),(84,85),(100,64),(40,121),
+         (44,112),(48,109),(44,111),(66,102),(41,123),(42,127),(41,114),(59,105)]
+
+# n_white après chaque site, relevé dans le log du greedy
+N_WHITE_GLOUTON = [265,221,187,156,127,107,87,68,57,50,43,37,32,
+                   27,23,19,16,14,13,12,8,5,3,2,1,0]
+
+
+def rejouer(env):
+    """Rejoue les sites, puis STOP si l'épisode n'est pas fini."""
+    env.reset()
+    n_whites = []
+    done = False
+    for ix, iy in SITES:
+        etat, r, done, info = env.step((ix, iy, "3G", 900))
+        n_whites.append(info["n_white"])
+        if done:
+            break
+    if not done:
+        etat, r, done, info = env.step("STOP")
+    dp = env._dernier_resultat_dp
+    return n_whites, {"qos_mean": dp["qos_mean"], "qos_min": dp["qos_min"],
+                      "r_fin": info["r_fin"], "cout": info["cout_total"],
+                      "n_white": info["n_white"]}
+
 
 env = FerroMobileEnv(scenario="S1", budget=10_000_000.0, t_max=150,
                      sauvegarder_deploiements_rl=False)
-env.reset()
-U0 = env.U_courant
-somme_rt = 0.0
-done = False
 
-for k, (ix, iy) in enumerate(SITES, start=1):
-    etat, r, done, info = env.step((ix, iy, "3G", 900))
-    r_t = r - info.get("r_fin", 0.0)   # on retire r_fin du dernier step
-    somme_rt += r_t
-    print(f"site {k} : n_white={info['n_white']}, r_t={r_t:.4f}")
-    if done:
-        break
+# Deux replays dans le MÊME processus : la RNG du shadowing avance entre les deux.
+# (Deux lancements séparés du script donneraient le même résultat, seed fixe 123.)
+nw1, res1 = rejouer(env)
+nw2, res2 = rejouer(env)
 
-# si n_white n'est pas tombé à 0, l'épisode n'est pas fini : STOP pour avoir r_fin
-if not done:
-    print("\nn_white > 0 après les 29 sites : STOP manuel")
-    etat, r, done, info = env.step("STOP")
+print("site | greedy | replay 1 | replay 2")
+for k in range(len(SITES)):
+    a = nw1[k] if k < len(nw1) else "-"
+    b = nw2[k] if k < len(nw2) else "-"
+    print(f"{k+1:4d} | {N_WHITE_GLOUTON[k]:6d} | {a!s:>8} | {b!s:>8}")
 
-dp = env._dernier_resultat_dp
-print(f"\nqos_mean={dp['qos_mean']:.3f}, qos_min={dp['qos_min']:.3f}")
-print(f"U0={U0:.4f}, U_final={env.U_courant:.4f}")
-print(f"somme r_t={somme_rt:.4f}, U_final-U0={env.U_courant - U0:.4f}")
-print(f"r_fin={info.get('r_fin')}, cout={info.get('cout_total')}, n_white final={info.get('n_white')}")
+for nom, res in [("replay 1", res1), ("replay 2", res2)]:
+    print(f"\n{nom} : n_white final={res['n_white']}, qos_mean={res['qos_mean']:.3f}, "
+          f"qos_min={res['qos_min']:.3f}, r_fin={res['r_fin']:.4f}, cout={res['cout']:.0f}€")
+
+print("\nLecture de r_fin : entre 0.2 et 0.4 = succès, -0.5 = QoS insuffisante, < -0.5 = zones blanches restantes")
