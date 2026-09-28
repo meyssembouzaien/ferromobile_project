@@ -19,8 +19,8 @@ Corrections documentées :
       avait déjà décalé les arguments sans erreur).
     - reset() : itertuples() limité aux 8 colonnes utiles (61 colonnes
       rendaient reset() très lent). Résultat identique.
-    - Espace d'action limité aux cellules à moins de DIST_MAX_ACTION_M de la voie.
-    - État à 31 canaux : + zones blanches proches, + déploiements du RL.
+    - État à 28 canaux : une carte des mâts construits par le RL. Sans elle, l'agent
+      ne voit pas ses propres antennes (sans opérateur), alors que le coût en dépend (§12).
 """
 
 import os
@@ -29,13 +29,11 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
-from scipy.spatial import cKDTree
 
-from grid_config import construire_grille_depuis_dataset, VERS_METRES
+from grid_config import construire_grille_depuis_dataset
 from build_state import construire_canaux_statiques
 from build_state_dynamic import (construire_canaux_infrastructure, construire_canaux_performance,
-                                 construire_canal_blancs_proches, construire_canaux_deploiements_rl,
-                                 centres_cellules)
+                                 construire_canal_mats_rl)
 from trajectory_dp import trajectory_dp
 from simulateur_deploiement import simuler_deploiement
 from cost_model import get_total_cost
@@ -49,7 +47,6 @@ DATASET_ENRICHI = os.path.join(BASE_DIR, "data", "processed", "dataset_enrichi.c
 DATASET_ENRICHI_RL_DIR = os.path.join(BASE_DIR, "data", "processed", "dataset_enrichi_rl")
 
 D_COV = 1.0
-DIST_MAX_ACTION_M = 1000   # tous les sites gloutons sont à moins de 270 m de la voie
 LAMBDA_H, LAMBDA_O, LAMBDA_T = 0.05, 0.05, 0.05
 
 # 2G exclu : son débit max (0,24 Mbps) n'atteint jamais D_cov
@@ -109,24 +106,14 @@ class FerroMobileEnv:
         self.grille = construire_grille_depuis_dataset(self.df_base)
         self.df_points = (self.df_base[["point_id", "lat", "lon", "altitude_m", "vegetation", "in_tunnel"]]
                            .drop_duplicates("point_id"))
-        hors_tunnel = self.df_points[~self.df_points["in_tunnel"]].sort_values("point_id")
-        self.points_hors_tunnel = set(hors_tunnel["point_id"])
+        self.points_hors_tunnel = set(self.df_points[~self.df_points["in_tunnel"]]["point_id"])
         self.n_total = len(self.points_hors_tunnel)
-        self._pid_hors_tunnel = hors_tunnel["point_id"].values
-        x, y = VERS_METRES.transform(hors_tunnel["lon"].values, hors_tunnel["lat"].values)
-        self._xy_hors_tunnel = np.column_stack([x, y])
 
-        # Cellules où le RL peut construire : dans le corridor ET à moins de DIST_MAX_ACTION_M de la voie
-        x_voie, y_voie = VERS_METRES.transform(self.df_points["lon"].values, self.df_points["lat"].values)
-        distance, _ = cKDTree(np.column_stack([x_voie, y_voie])).query(centres_cellules(self.grille))
-        self.masque_actions = self.grille.corridor_mask & (distance.reshape(self.grille.nx, self.grille.ny)
-                                                           <= DIST_MAX_ACTION_M)
-
-        # Espace d'action : cellules autorisées x (g, f), construit une fois
+        # Espace d'action : cellules du corridor x (g, f), construit une fois
         self.actions = [STOP] + [
             (int(ix), int(iy), g, f)
             for ix in range(self.grille.nx) for iy in range(self.grille.ny)
-            if self.masque_actions[ix, iy]
+            if self.grille.corridor_mask[ix, iy]
             for g in BANDES_PAR_GENERATION
             for f in BANDES_PAR_GENERATION[g]
         ]
@@ -164,7 +151,6 @@ class FerroMobileEnv:
         self.debit_reel_par_point = df_scenario[~df_scenario["in_tunnel"]].groupby("point_id")["debit_adj_mbps"].max()
 
         self._resultats_hypo = []
-        self.canaux_infra = construire_canaux_infrastructure(self.grille, self.df_reel)   # réseau réel, fixe
 
         # Réseau réel projeté sur (ix, iy, g, f), sans opérateur (o n'est pas dans l'action)
         antennes_uniques = self.df_reel[["ant_id", "ant_lat", "ant_lon", "generation", "bande_mhz"]].drop_duplicates("ant_id")
@@ -262,7 +248,9 @@ class FerroMobileEnv:
     # ÉTAT
     # ------------------------------------------------------------------
     def _construire_etat(self):
-        """État = 31 canaux spatiaux + b_t + progression."""
+        """État = 28 canaux spatiaux + b_t + progression."""
+        canaux_infra = construire_canaux_infrastructure(
+            self.grille, self.df_reel, cellules_hypothetiques=self._resultats_hypo_pour_infra())
 
         if self._resultats_hypo:
             debit_hypo = self._serie_max_par_point(self._resultats_hypo, "debit_adj_mbps")
@@ -282,15 +270,14 @@ class FerroMobileEnv:
 
         canaux_perf = construire_canaux_performance(self.grille, self.df_points, meilleur_par_point)
 
-        est_blanc = (debit_combine.reindex(self._pid_hors_tunnel).fillna(0) < D_COV).values
-        canal_blancs = construire_canal_blancs_proches(self.grille, self._xy_hors_tunnel, est_blanc)
-        canaux_rl = construire_canaux_deploiements_rl(self.grille, self.infrastructure_deployee)
-
-        etat_spatial = np.concatenate([self.canaux_statiques, self.canaux_infra, canaux_perf,
-                                       canal_blancs, canaux_rl], axis=0)
+        canal_mats = construire_canal_mats_rl(self.grille, self.infrastructure_deployee)
+        etat_spatial = np.concatenate([self.canaux_statiques, canaux_infra, canaux_perf, canal_mats], axis=0)
         b_t = self.budget_restant / self.budget_total
         progression = self.t / self.t_max
         return {"grille": etat_spatial, "b_t": b_t, "progression": progression}
+
+    def _resultats_hypo_pour_infra(self):
+        return self._resultats_hypo
 
     # ------------------------------------------------------------------
     # JOURNALISATION

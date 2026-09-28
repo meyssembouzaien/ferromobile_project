@@ -25,8 +25,8 @@ transformer un smoke test en fausse validation scientifique :
 Lancer : python test_environment_rl.py
 """
 
-from environment_rl import FerroMobileEnv, STOP, BANDES_PAR_GENERATION, DIST_MAX_ACTION_M
-from build_state_dynamic import N_CANAUX_ETAT, GENERATIONS_RL
+from environment_rl import FerroMobileEnv, STOP, BANDES_PAR_GENERATION
+from build_state_dynamic import N_CANAUX_ETAT
 
 
 def _env_test(**kwargs):
@@ -66,8 +66,7 @@ def test_2_espace_actions():
     env = _env_test()
     env.reset()
 
-    assert not (env.masque_actions & ~env.grille.corridor_mask).any(), "cellule d'action hors corridor"
-    n_cellules_corridor = int(env.masque_actions.sum())
+    n_cellules_corridor = int(env.grille.corridor_mask.sum())
     n_combos_gf = sum(len(v) for v in BANDES_PAR_GENERATION.values())
     attendu = n_cellules_corridor * n_combos_gf + 1  # +1 pour STOP
 
@@ -79,11 +78,12 @@ def test_2_espace_actions():
         if a == STOP:
             continue
         ix, iy, g, f = a
-        assert env.masque_actions[ix, iy], f"Action {a} hors des cellules autorisées"
+        assert env.grille.corridor_mask[ix, iy], \
+            f"Action {a} hors corridor_mask — §15 : le RL ne doit jamais pouvoir choisir cette cellule"
         assert f in BANDES_PAR_GENERATION[g], f"Bande {f} invalide pour {g}"
 
     print(f"test_2_espace_actions : OK (|A|={len(env.actions)} = "
-          f"{n_cellules_corridor} cellules à moins de {DIST_MAX_ACTION_M} m x {n_combos_gf} combos + 1 STOP)")
+          f"{n_cellules_corridor} cellules x {n_combos_gf} combos + 1 STOP)")
 
 
 def test_3_faisabilite():
@@ -171,9 +171,8 @@ def test_5_step_deploiement():
     assert env.budget_restant < budget_avant, "le budget doit diminuer après un déploiement facturé"
     assert isinstance(r_t, float), "r_t doit être un nombre"
     assert etat["grille"].shape == (N_CANAUX_ETAT, env.grille.nx, env.grille.ny)
-    ix, iy, g, _ = action
-    canal_rl = N_CANAUX_ETAT - len(GENERATIONS_RL) + GENERATIONS_RL.index(g)
-    assert etat["grille"][canal_rl, ix, iy] == 1.0, "le déploiement du RL doit apparaître dans l'état"
+    assert etat["grille"][-1, action[0], action[1]] == 1.0, "le mât du RL doit apparaître sur sa carte"
+    assert etat["grille"][-1].sum() == 1.0, "un seul mât construit"
     assert etat["b_t"] == env.budget_restant / env.budget_total
     assert env.t == 1, "le compteur temporel doit avancer après un step()"
     assert etat["progression"] == env.t / env.t_max

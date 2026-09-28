@@ -1,24 +1,25 @@
 """
-build_state_dynamic.py : canaux dynamiques de l'état (§15), recalculés après chaque action.
+build_state_dynamic.py : canaux dynamiques de l'état (§15), recalculés après chaque action du RL.
 
     16 canaux  infrastructure réelle (opérateur x génération)
      2 canaux  performance actuelle (couverture, QoS)
-     1 canal   part des zones blanches restantes à moins de RAYON_BLANCS_M
-     3 canaux  déploiements du RL (3G, 4G, 5G)
+     1 canal   mâts construits par le RL
 
-État complet = 9 canaux statiques + 22 dynamiques = 31 canaux.
+État complet = 9 canaux statiques (build_state.py) + 19 dynamiques = 28 canaux.
 
-Lancer : python build_state_dynamic.py
+Couverture et QoS utilisent le meilleur candidat de chaque point (réel ou hypothétique),
+comme N_white (§6), pas la cellule choisie par la DP.
+
+Lancer : python build_state_dynamic.py (teste sur dataset_base.csv, S1)
 """
 
 import os
 
 import numpy as np
 import pandas as pd
-from scipy.spatial import cKDTree
 
-from grid_config import construire_grille_depuis_dataset, RESOLUTION_M, VERS_METRES
-from build_state import construire_canaux_statiques
+from grid_config import construire_grille_depuis_dataset
+from build_state import construire_canaux_statiques, NOMS_CANAUX_STATIQUES
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
@@ -26,39 +27,55 @@ DATASET_BASE = os.path.join(BASE_DIR, "data", "processed", "dataset_base.csv")
 DATASET_ENRICHI = os.path.join(BASE_DIR, "data", "processed", "dataset_enrichi.csv")
 
 OPERATEURS = ["ORANGE", "SFR", "BOUYGUES TELECOM", "FREE MOBILE"]
+N_CANAUX_ETAT = 9 + 16 + 2 + 1   # statiques + infrastructure réelle + performance + mâts du RL
 GENERATIONS = ["2G", "3G", "4G", "5G"]
-GENERATIONS_RL = ["3G", "4G", "5G"]   # la 2G n'est pas dans l'espace d'action
 D_COV = 1.0
-RAYON_BLANCS_M = 2000                 # le meilleur site glouton couvre environ 1,3 km de voie
-
-N_CANAUX_ETAT = 9 + 16 + 2 + 1 + len(GENERATIONS_RL)   # 31
 
 
-def centres_cellules(grille):
-    """Coordonnées (x, y) en mètres du centre de chaque cellule, ordre (ix, iy)."""
-    i, j = np.meshgrid(np.arange(grille.nx), np.arange(grille.ny), indexing="ij")
-    x = grille.x_min + (i.ravel() + 0.5) * RESOLUTION_M
-    y = grille.y_min + (j.ravel() + 0.5) * RESOLUTION_M
-    return np.column_stack([x, y])
+def construire_canaux_infrastructure(grille, df_reel, cellules_hypothetiques=None):
+    """16 canaux (opérateur x génération), présence binaire par cellule.
 
+    df_reel : lignes du réseau réel (ant_lat, ant_lon, operateur, generation),
+        une ligne par cellule radio existante (pas par point de trajet :
+        dédupliquer d'abord si besoin).
+    cellules_hypothetiques : liste optionnelle de dicts {"cellule": (site,
+        operateur, generation, bande)} ajoutés cet épisode. operateur=None
+        pour une cellule hypothétique (§9) : n'apparaît dans aucun des 16
+        canaux, puisqu'aucun opérateur n'est modélisé pour elle.
+    """
+    canaux = np.zeros((16, grille.nx, grille.ny), dtype=float)
+    index_og = {(o, g): k for k, (o, g) in
+                enumerate((o, g) for o in OPERATEURS for g in GENERATIONS)}
 
-def construire_canaux_infrastructure(grille, df_reel):
-    """16 canaux : 1 là où le réseau réel a une antenne (opérateur, génération)."""
-    canaux = np.zeros((16, grille.nx, grille.ny))
-    index = {(o, g): k for k, (o, g) in enumerate((o, g) for o in OPERATEURS for g in GENERATIONS)}
+    sites_reels = df_reel[["ant_lat", "ant_lon", "operateur", "generation"]].drop_duplicates()
+    for _, r in sites_reels.iterrows():
+        c = grille.gps_vers_cellule(r["ant_lat"], r["ant_lon"])
+        cle = (r["operateur"], r["generation"])
+        if c is not None and cle in index_og:
+            canaux[index_og[cle], c[0], c[1]] = 1.0
 
-    antennes = df_reel[["ant_lat", "ant_lon", "operateur", "generation"]].drop_duplicates()
-    for r in antennes.itertuples():
-        c = grille.gps_vers_cellule(r.ant_lat, r.ant_lon)
-        if c is not None and (r.operateur, r.generation) in index:
-            canaux[index[(r.operateur, r.generation)], c[0], c[1]] = 1.0
+    if cellules_hypothetiques:
+        for item in cellules_hypothetiques:
+            site, operateur, generation, _bande = item["cellule"]
+            if operateur is None:
+                continue  # cellule hypothétique : aucun opérateur modélisé (§9)
+            lat, lon = site if isinstance(site, tuple) and len(site) == 2 else (None, None)
+            if lat is None:
+                continue
+            c = grille.gps_vers_cellule(lat, lon)
+            cle = (operateur, generation)
+            if c is not None and cle in index_og:
+                canaux[index_og[cle], c[0], c[1]] = 1.0
+
     return canaux
 
 
 def construire_canaux_performance(grille, df_points, meilleur_par_point):
-    """2 canaux : couverture et QoS par cellule.
-
-    (-1, -1) : pas de point de trajet ; (0, -1) : points présents mais aucun couvert.
+    """2 canaux : couverture (fraction de points couverts par cellule) et
+    QoS (moyenne parmi les points couverts). Convention :
+        (-1, -1)  cellule sans aucun point de trajet
+        ( 0, -1)  points de trajet présents, mais aucun couvert
+        ( C,  Q)  sinon
     """
     couverture = np.full((grille.nx, grille.ny), -1.0)
     qos_moy = np.full((grille.nx, grille.ny), -1.0)
@@ -67,70 +84,87 @@ def construire_canaux_performance(grille, df_points, meilleur_par_point):
     df["couvert"] = df["meilleur_debit"].fillna(0) >= D_COV
 
     par_cellule = {}
-    for r in df.itertuples():
-        c = grille.gps_vers_cellule(r.lat, r.lon)
-        if c is not None:
-            par_cellule.setdefault(c, []).append(r)
+    for _, r in df.iterrows():
+        c = grille.gps_vers_cellule(r["lat"], r["lon"])
+        if c is None:
+            continue
+        par_cellule.setdefault(c, []).append(r)
 
-    for (i, j), lignes in par_cellule.items():
-        couverts = [l for l in lignes if l.couvert]
-        couverture[i, j] = len(couverts) / len(lignes)
+    for c, lignes in par_cellule.items():
+        n_total = len(lignes)
+        couverts = [l for l in lignes if l["couvert"]]
+        couverture[c[0], c[1]] = len(couverts) / n_total
         if couverts:
-            qos_moy[i, j] = sum(l.meilleur_qos for l in couverts) / len(couverts)
+            qos_moy[c[0], c[1]] = sum(l["meilleur_qos"] for l in couverts) / len(couverts)
+        # sinon : couverture=0 déjà posé, qos_moy reste -1 (convention "0 couvert")
 
     return np.stack([couverture, qos_moy])
 
 
-def construire_canal_blancs_proches(grille, xy_points, est_blanc, rayon_m=RAYON_BLANCS_M):
-    """1 canal : part des zones blanches restantes à moins de rayon_m de chaque cellule."""
+def construire_canal_mats_rl(grille, infrastructure_deployee):
+    """1 canal : 1 dans les cellules où le RL a déjà construit un mât, 0 ailleurs.
+
+    Le coût d'une action en dépend (§12) : une antenne ajoutée sur un mât du RL ne repaie pas C_site.
+    """
     canal = np.zeros((1, grille.nx, grille.ny))
-    n_blancs = int(est_blanc.sum())
-    if n_blancs == 0:
-        return canal
-    arbre = cKDTree(xy_points[est_blanc])
-    comptes = arbre.query_ball_point(centres_cellules(grille), r=rayon_m, return_length=True)
-    canal[0] = (comptes / n_blancs).reshape(grille.nx, grille.ny)
+    for ix, iy, _g, _f in infrastructure_deployee:
+        canal[0, ix, iy] = 1.0
     return canal
 
 
-def construire_canaux_deploiements_rl(grille, infrastructure_deployee):
-    """3 canaux (3G, 4G, 5G) : 1 là où le RL a déjà construit."""
-    canaux = np.zeros((len(GENERATIONS_RL), grille.nx, grille.ny))
-    for ix, iy, g, _ in infrastructure_deployee:
-        canaux[GENERATIONS_RL.index(g), ix, iy] = 1.0
-    return canaux
+def construire_etat_complet(canaux_statiques, canaux_infra, canaux_perf, canal_mats_rl):
+    """Empile les 4 blocs en un seul tenseur (28, nx, ny)."""
+    return np.concatenate([canaux_statiques, canaux_infra, canaux_perf, canal_mats_rl], axis=0)
+
+
+def valider_canaux_dynamiques(canaux_infra, canaux_perf, grille):
+    assert canaux_infra.shape == (16, grille.nx, grille.ny)
+    assert canaux_perf.shape == (2, grille.nx, grille.ny)
+    print(f"Infrastructure : {int(canaux_infra.sum())} cellules occupées au total (toutes combinaisons confondues)")
+    print(f"Cellules avec plusieurs technologies au même endroit : {int((canaux_infra.sum(axis=0) > 1).sum())}")
+
+    couverture, qos = canaux_perf
+    hors_trajet = (couverture == -1) & (qos == -1)
+    zero_couvert = (couverture == 0) & (qos == -1)
+    normal = couverture > 0
+    print(f"\nCellules hors trajet (-1,-1)      : {int(hors_trajet.sum())}")
+    print(f"Cellules trajet, 0% couvert (0,-1) : {int(zero_couvert.sum())}")
+    print(f"Cellules avec couverture > 0       : {int(normal.sum())}")
+    assert int(hors_trajet.sum()) + int(zero_couvert.sum()) + int(normal.sum()) == grille.nx * grille.ny
+    print("\nToutes les vérifications passent.")
 
 
 if __name__ == "__main__":
     df_base = pd.read_csv(DATASET_BASE, low_memory=False)
-    df = pd.read_csv(DATASET_ENRICHI, low_memory=False)
-    df = df[df["scenario_id"] == "S1"]
+    df_enrichi = pd.read_csv(DATASET_ENRICHI, low_memory=False)
+    df_s1 = df_enrichi[df_enrichi["scenario_id"] == "S1"]
 
     df_points = df_base[["point_id", "lat", "lon", "altitude_m", "vegetation", "in_tunnel"]].drop_duplicates("point_id")
-    df_meteo = df[["point_id", "pluie_mm_h", "temp_c"]].drop_duplicates("point_id")
+    df_meteo_s1 = df_enrichi[df_enrichi["scenario_id"] == "S1"][["point_id", "pluie_mm_h", "temp_c"]].drop_duplicates("point_id")
     grille = construire_grille_depuis_dataset(df_base)
-    df_reel = df[(~df["in_tunnel"]) & (df["ant_id"].notna())]
 
-    stat = construire_canaux_statiques(grille, df_points, df_meteo)
-    infra = construire_canaux_infrastructure(grille, df_reel)
+    canaux_stat = construire_canaux_statiques(grille, df_points, df_meteo_s1)
 
-    meilleur = df_reel.groupby("point_id").agg(meilleur_debit=("debit_adj_mbps", "max"),
-                                               meilleur_qos=("qos", "max")).reset_index()
-    perf = construire_canaux_performance(grille, df_points, meilleur)
+    df_reel = df_s1[df_s1["ant_id"].notna()]
+    canaux_infra = construire_canaux_infrastructure(grille, df_reel)
 
-    hors_tunnel = df_points[~df_points["in_tunnel"]]
-    x, y = VERS_METRES.transform(hors_tunnel["lon"].values, hors_tunnel["lat"].values)
-    debit = meilleur.set_index("point_id")["meilleur_debit"].reindex(hors_tunnel["point_id"]).fillna(0)
-    est_blanc = (debit < D_COV).values
-    blancs = construire_canal_blancs_proches(grille, np.column_stack([x, y]), est_blanc)
+    meilleur_par_point = (df_s1.groupby("point_id")
+                           .agg(meilleur_debit=("debit_adj_mbps", "max"))
+                           .reset_index())
+    # meilleure qos = qos de la ligne au meilleur debit, pas juste max(qos) isolement.
+    # Certains points n'ont aucune ligne avec débit valide (aucun candidat réel) :
+    # on les exclut avant idxmax, meilleur_par_point les aura quand même avec debit=NaN.
+    df_s1_avec_debit = df_s1.dropna(subset=["debit_adj_mbps"])
+    idx_meilleur = df_s1_avec_debit.loc[df_s1_avec_debit.groupby("point_id")["debit_adj_mbps"].idxmax()]
+    meilleur_par_point = meilleur_par_point.merge(
+        idx_meilleur[["point_id", "qos"]].rename(columns={"qos": "meilleur_qos"}), on="point_id", how="left")
 
-    rl = construire_canaux_deploiements_rl(grille, [(40, 119, "3G", 900)])
+    canaux_perf = construire_canaux_performance(grille, df_points, meilleur_par_point)
 
-    etat = np.concatenate([stat, infra, perf, blancs, rl])
+    canal_mats = construire_canal_mats_rl(grille, [(40, 119, "3G", 900), (40, 119, "4G", 800)])
+    assert canal_mats.sum() == 1 and canal_mats[0, 40, 119] == 1, "deux antennes au même endroit = un seul mât"
+
+    etat = construire_etat_complet(canaux_stat, canaux_infra, canaux_perf, canal_mats)
     assert etat.shape == (N_CANAUX_ETAT, grille.nx, grille.ny)
-    assert not np.isnan(etat).any()
-    assert rl.sum() == 1 and rl[0, 40, 119] == 1
-    print(f"État complet : {etat.shape}")
-    print(f"Zones blanches : {int(est_blanc.sum())}")
-    print(f"Canal zones blanches proches : max {blancs.max():.3f}, cellules > 0 : {int((blancs > 0).sum())}")
-    print("Toutes les vérifications passent.")
+    print(f"État complet : {etat.shape}\n")
+    valider_canaux_dynamiques(canaux_infra, canaux_perf, grille)
