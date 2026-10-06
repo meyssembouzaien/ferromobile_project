@@ -97,6 +97,23 @@ class ReplayBuffer:
     def __len__(self):
         return self.taille
 
+    _CHAMPS = ["grilles", "next_grilles", "b_t", "next_b_t", "progression", "next_progression",
+               "actions", "rewards", "dones", "next_masks_bits"]
+
+    def state_dict(self):
+        """Contenu du buffer, pour reprendre un entraînement sans repartir d'un buffer vide."""
+        etat = {c: getattr(self, c)[:self.taille].clone() for c in self._CHAMPS}
+        etat.update(ptr=self.ptr, taille=self.taille, capacity=self.capacity, n_actions=self.n_actions)
+        return etat
+
+    def load_state_dict(self, etat):
+        assert etat["capacity"] == self.capacity and etat["n_actions"] == self.n_actions, \
+            "buffer sauvegardé avec une autre capacité ou un autre nombre d'actions"
+        n = etat["taille"]
+        for c in self._CHAMPS:
+            getattr(self, c)[:n] = etat[c]
+        self.ptr, self.taille = etat["ptr"], n
+
 
 def _test_push_et_sample():
     nx, ny, n_canaux, n_actions = 5, 4, 27, 50
@@ -134,7 +151,21 @@ def _test_depassement_capacite():
     print("_test_depassement_capacite : OK")
 
 
+def _test_sauvegarde_restauration():
+    buf = ReplayBuffer(capacity=6, nx=3, ny=3, n_canaux_etat=4, n_actions=10)
+    for i in range(4):
+        grille = np.full((4, 3, 3), i, dtype=np.float32)
+        buf.push(grille, 0.5, 0.5, action=i, reward=float(i), next_grille=grille,
+                  next_b_t=0.5, next_progression=0.5, done=False, next_mask=np.ones(10, dtype=bool))
+    copie = ReplayBuffer(capacity=6, nx=3, ny=3, n_canaux_etat=4, n_actions=10)
+    copie.load_state_dict(buf.state_dict())
+    assert len(copie) == 4 and copie.ptr == buf.ptr
+    assert torch.equal(copie.grilles, buf.grilles) and torch.equal(copie.rewards, buf.rewards)
+    print("_test_sauvegarde_restauration : OK")
+
+
 if __name__ == "__main__":
+    _test_sauvegarde_restauration()
     _test_push_et_sample()
     _test_depassement_capacite()
     print("\nTous les tests passent.")
