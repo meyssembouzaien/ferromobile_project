@@ -14,6 +14,7 @@ Lancer (Colab ou Kaggle, avec dataset et crc-covlib) : python train_dqn.py
 Réglages sans modifier le code (variables d'environnement) :
     FM_EPISODES=1000      nombre total d'épisodes (défaut 300)
     FM_W_W=5              poids w_W des zones blanches dans U (défaut 1, valeur de référence)
+    FM_ARCH=vanilla       DQN sans décomposition V/A (ablation), défaut : dueling
     FM_EXPLORATION=uniforme, FM_SEED=1, FM_SAVE_EVERY=5, FM_SAVE_BUFFER=1
     FM_RUN=nom            sous-dossier de checkpoints/ (un run = un dossier)
 
@@ -34,7 +35,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dqn_model import FerroMobileDuelingDQN, N_CANAUX_ETAT
+from dqn_model import FerroMobileDuelingDQN, FerroMobileVanillaDQN, N_CANAUX_ETAT
 from replay_buffer import ReplayBuffer
 
 CE_FICHIER = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +56,8 @@ MODE_EXPLORATION = os.environ.get("FM_EXPLORATION", "softmax")   # "uniforme" ou
 TEMPERATURE = 1.0                # softmax : 3 à 9 % de l'exploration sur le 1 % d'actions les mieux notées
 N_STEPS_UNIFORME = 1000          # softmax : exploration uniforme tant que le réseau n'a rien appris
 SEED = int(os.environ.get("FM_SEED", 0))
+ARCHITECTURE = os.environ.get("FM_ARCH", "dueling")   # "dueling" ou "vanilla"
+CLASSE_MODELE = {"dueling": FerroMobileDuelingDQN, "vanilla": FerroMobileVanillaDQN}[ARCHITECTURE]
 MAJ_CIBLE_TOUS_LES_N_STEPS = 200
 SAUVER_TOUS_LES_N_EPISODES = int(os.environ.get("FM_SAVE_EVERY", 25))
 EVALUER_TOUS_LES_N_EPISODES = 25
@@ -70,7 +73,7 @@ SAUVER_BUFFER = os.environ.get("FM_SAVE_BUFFER", "0") == "1"   # ~6 Go par sauve
 POIDS_W = float(os.environ.get("FM_W_W", 1.0))
 POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": 1.0, "w_O": 1.0, "w_T": 1.0}
 
-NOM_RUN = os.environ.get("FM_RUN", f"{MODE_EXPLORATION}_wW{POIDS_W:g}_seed{SEED}")
+NOM_RUN = os.environ.get("FM_RUN", f"{ARCHITECTURE}_{MODE_EXPLORATION}_wW{POIDS_W:g}_seed{SEED}")
 DOSSIER_CHECKPOINTS = os.path.join(RACINE_PROJET, "checkpoints", NOM_RUN)
 CHEMIN_DERNIER_CHECKPOINT = os.path.join(DOSSIER_CHECKPOINTS, "dernier.pt")
 CHEMIN_ANCIEN_CHECKPOINT = os.path.join(RACINE_PROJET, "checkpoints", "dernier.pt")
@@ -202,7 +205,8 @@ def charger_checkpoint(modele, modele_cible, optimiseur, device, n_actions, buff
     états aléatoires et, si sauvegardé, replay buffer. Refuse un checkpoint d'un autre
     modèle ou d'une autre récompense (ce serait un autre problème d'apprentissage)."""
     chemin = CHEMIN_DERNIER_CHECKPOINT
-    if not os.path.exists(chemin) and POIDS_W == 1.0 and os.path.exists(CHEMIN_ANCIEN_CHECKPOINT):
+    if (not os.path.exists(chemin) and POIDS_W == 1.0 and ARCHITECTURE == "dueling"
+            and os.path.exists(CHEMIN_ANCIEN_CHECKPOINT)):
         chemin = CHEMIN_ANCIEN_CHECKPOINT   # run lancé avant les sous-dossiers par run (poids de référence)
         print(f"Reprise depuis l'ancien emplacement : {chemin}")
     if not os.path.exists(chemin):
@@ -374,8 +378,8 @@ if __name__ == "__main__":
                          sauvegarder_deploiements_rl=False)
     n_configs = sum(len(v) for v in BANDES_PAR_GENERATION.values())
 
-    modele = FerroMobileDuelingDQN(n_configs, env.grille.corridor_mask).to(device)
-    modele_cible = FerroMobileDuelingDQN(n_configs, env.grille.corridor_mask).to(device)
+    modele = CLASSE_MODELE(n_configs, env.grille.corridor_mask).to(device)
+    modele_cible = CLASSE_MODELE(n_configs, env.grille.corridor_mask).to(device)
     optimiseur = torch.optim.Adam(modele.parameters(), lr=LR)
 
     verifier_integration(env, modele, device)
