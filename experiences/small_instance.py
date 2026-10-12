@@ -1,9 +1,11 @@
 """
-small_instance.py : exhaustive optimum on the small instance of Experiment F (§4.7.1).
-Three grid cells with the most white points x (3G 900, 4G 800, 5G 700) = 9 candidates, 512 subsets.
-Coverage-Greedy and Trajectory-Greedy are rerun on the same 9 candidates.
-Usage (from the repository root): python experiences/small_instance.py
-Output: <repo>/resultats/petite_instance.csv
+small_instance.py : optimum exact de la petite instance (Expérience F, tableau 4.11).
+
+9 candidats (3 cellules x 3 configurations), 512 sous-ensembles testés.
+Coverage-Greedy et Trajectory-Greedy sont relancés sur les mêmes candidats.
+
+Lancer (depuis la racine) : python experiences/small_instance.py
+Sortie : resultats/petite_instance.csv
 """
 import itertools, os, sys, collections
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "placement"))

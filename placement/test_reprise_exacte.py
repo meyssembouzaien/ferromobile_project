@@ -1,12 +1,8 @@
 """
-test_reprise_exacte.py : un run interrompu puis repris donne exactement le même résultat
-qu'un run continu (section 4.2.2 du mémoire).
+test_reprise_exacte.py : un run interrompu puis repris donne le même résultat qu'un run continu.
 
-Environnement factice, petit et déterministe, avec la même interface que FerroMobileEnv
-(28 canaux, dont 25 fixes, STOP en action 0). Le run "interrompu" s'arrête par la limite de
-durée de session (FM_MAX_HOURS) après chaque épisode, sauvegarde, puis reprend avec des
-objets neufs (modèle, optimiseur, buffer), comme une nouvelle session Kaggle.
-Compare : poids finaux, journaux d'entraînement et d'évaluation.
+Petit environnement factice ; le run est coupé après chaque épisode puis repris.
+Compare les poids finaux et les journaux.
 
 Lancer : python test_reprise_exacte.py
 """

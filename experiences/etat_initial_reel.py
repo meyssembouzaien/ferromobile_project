@@ -1,7 +1,9 @@
-"""Calcule l'état initial EXACT de FerroMobileEnv (réseau réel seul, scénario S1),
-sans crc-covlib ni DEM : reproduit reset() + _evaluer_dp_courant() + compute_r_fin()
-à partir de dataset_enrichi.csv. Valeurs RÉELLES (pas provisoires).
-Usage : python etat_initial_reel.py <racine_repo>
+"""
+etat_initial_reel.py : état initial réel I_0 (réseau existant, S1), tableau 4.3.
+
+Pas besoin du DEM ni de crc-covlib.
+
+Lancer : python etat_initial_reel.py <racine_repo>
 """
 import json, sys, os
 import pandas as pd

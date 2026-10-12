@@ -1,8 +1,12 @@
-"""Exact quantities computable without the DEM (scenario S1):
- 1. DP of the existing network for lambda in a grid (Experiment D figure);
- 2. white zones of the existing network with one operator removed (Experiment C 'before' column);
- 3. number of short white segments whose isolated coverage gives dU < 0 under reward variants.
-Usage: python real_extras.py <repo_root>"""
+"""
+real_extras.py : quantités exactes sans DEM (S1).
+
+ 1. DP du réseau existant pour plusieurs lambda (figure de l'Expérience D)
+ 2. zones blanches sans un opérateur (colonne "avant" du tableau 4.12)
+ 3. segments blancs dont la couverture donne ΔU < 0 selon la récompense
+
+Lancer : python real_extras.py <racine_repo>
+"""
 import json, os, sys
 import pandas as pd
 root = sys.argv[1]; sys.path.insert(0, os.path.join(root, "placement"))
@@ -21,7 +25,7 @@ def cells_of(df):
                   for r in g.itertuples()] for pid, g in df.groupby("point_id")}
 cells = cells_of(reel)
 res = {}
-# 1. lambda sweep
+# 1. Balayage de lambda
 rows = []
 P = sorted(cells)
 for lam in [0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5]:
@@ -29,14 +33,14 @@ for lam in [0, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5]:
     rows.append({"lambda": lam, "N_H": dp["N_H"], "N_O": dp["N_O"], "N_T": dp["N_T"], "q_mean": round(dp["qos_mean"], 4)})
     print(rows[-1])
 pd.DataFrame(rows).to_csv(os.path.join(out, "real_lambda_sweep.csv"), index=False)
-# 2. operator removal
+# 2. Retrait d'un opérateur
 ops = {}
 for op in sorted(reel.operateur.dropna().unique()):
     d = sh[sh.operateur != op]
     deb = d.groupby("point_id").debit_adj_mbps.max().reindex(ht).fillna(0)
     ops[op] = int((deb < 1.0).sum())
 print("white zones without operator:", ops); res["white_without_operator"] = ops
-# 3. reward variants: isolated coverage of each white segment with a 4G cell (qos 0.847)
+# 3. Variantes de récompense : chaque segment blanc couvert par une cellule 4G
 deb = sh.groupby("point_id").debit_adj_mbps.max().reindex(ht).fillna(0); blanc = set(deb[deb < 1].index)
 segs, cur = [], []
 for p in ht:

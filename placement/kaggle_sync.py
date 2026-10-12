@@ -1,21 +1,9 @@
 """
-kaggle_sync.py : sauvegarde durable d'un run d'entraînement dans un dataset Kaggle privé.
+kaggle_sync.py : sauvegarde du run dans un dataset Kaggle privé.
 
-Pourquoi : sur Kaggle, /kaggle/working disparaît à la fin d'une session interactive, et
-une session dure au plus 12 heures. Un run de 1000 épisodes en demande plusieurs.
-Après chaque checkpoint, tout le dossier du run (checkpoint, replay buffer, journaux,
-console) est envoyé comme nouvelle version d'un dataset privé "<utilisateur>/<slug>".
-Au démarrage suivant, la dernière version est téléchargée et l'entraînement reprend
-exactement là où il s'était arrêté. La sauvegarde ne dépend ni du navigateur, ni du
-wifi, ni de l'ordinateur de l'utilisateur : tout se passe sur les serveurs de Kaggle.
-
-Identifiants : secrets Kaggle KAGGLE_USERNAME et KAGGLE_KEY (Add-ons > Secrets du
-notebook), ou variables d'environnement du même nom, ou ~/.kaggle/kaggle.json.
-Sans identifiants, la synchronisation est désactivée (avertissement) : l'entraînement
-continue, avec les sauvegardes locales seulement.
-
-Une erreur réseau ne fait jamais échouer l'entraînement : l'envoi est retenté au
-checkpoint suivant (chaque version contient tout le dossier).
+Après chaque checkpoint, le dossier du run est envoyé comme nouvelle version du dataset.
+Au démarrage, la dernière version est téléchargée et l'entraînement reprend.
+Identifiants : secrets Kaggle KAGGLE_USERNAME et KAGGLE_KEY.
 """
 
 import json
@@ -105,8 +93,7 @@ class SauvegardeKaggle:
             json.dump({"title": self.titre, "id": self.id, "licenses": [{"name": "CC0-1.0"}]}, f)
 
     def restaurer(self):
-        """Télécharge la dernière version si elle est plus avancée que le dossier local.
-        Renvoie l'épisode restauré, ou None."""
+        """Télécharge la dernière version du run. Renvoie l'épisode restauré, ou None."""
         candidats = []
         if self.actif:
             temporaire = tempfile.mkdtemp(prefix="fm_restauration_")
@@ -119,7 +106,7 @@ class SauvegardeKaggle:
             else:
                 self._existe = False if ("404" in sortie or "not found" in sortie.lower()) else None
                 print(f"[kaggle_sync] pas de version téléchargée ({sortie[-200:]})")
-        # Dataset ajouté au notebook comme donnée d'entrée (Add Input), si l'API ne répond pas
+        # Dataset ajouté au notebook avec Add Input
         nom = self.id.split("/")[-1]
         for base in (f"/kaggle/input/{nom}", f"/kaggle/input/datasets/{self.id}"):
             if os.path.isdir(base):

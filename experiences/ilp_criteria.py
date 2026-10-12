@@ -1,10 +1,10 @@
 """
-ilp_criteria.py : minimum cost to leave at most k white zones (k = 20, 10, 5, 0), solved exactly
-on the cached coverage of ilp_reference.py (same candidates, same cost model).
-    min  sum C_radio x + sum C_site y
-    s.t. x_a <= y_c ; z_p <= sum_{a covers p} x_a ; sum z_p >= N_white0 - k ; binary.
-Usage: python ilp_criteria.py <repo_root> [--k 20,10,5,0] [--temps_max_s 900]
-Output: <repo_root>/resultats/ilp_criteres.csv
+ilp_criteria.py : coût minimal pour laisser au plus k zones blanches (k = 20, 10, 5, 0), tableau 4.15.
+
+Utilise le cache de couverture de ilp_reference.py (mêmes candidats, même coût).
+
+Lancer : python ilp_criteria.py <racine_repo> [--k 20,10,5,0]
+Sortie : resultats/ilp_criteres.csv
 """
 import argparse, os, pickle, sys
 import numpy as np, pandas as pd

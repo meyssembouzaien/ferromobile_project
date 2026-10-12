@@ -1,14 +1,10 @@
 """
 test_chemins_rapides.py : les accélérations de environment_rl.py ne changent aucun résultat.
 
-Compare, sur les données réelles (S1) et une suite d'actions tirées au hasard :
-    - le masque vectorisé et la boucle d'origine (_est_faisable sur chaque action) ;
-    - l'état (28 canaux) et celui construit comme dans la version d'origine ;
-    - un épisode avec et sans cache de simulation (récompenses, U, n_white, état).
-La propagation est remplacée par une simulation factice déterministe : le test porte
-sur la logique de l'environnement, pas sur P.1812 (pas besoin du DEM).
+Compare le masque, l'état et un épisode complet avec la version d'origine.
+La propagation radio est remplacée par une simulation factice (pas besoin du DEM).
 
-Lancer (depuis placement/, CRC_COVLIB_PATH défini) : python test_chemins_rapides.py
+Lancer (depuis placement/) : python test_chemins_rapides.py
 """
 
 import os
@@ -69,7 +65,7 @@ def jouer(env, graine, n_steps, verifier):
         if verifier:
             assert np.array_equal(masque, env._actions_faisables_reference()), "masque vectorisé différent"
             assert np.array_equal(etat["grille"], etat_reference(env)), "état différent de l'origine"
-        # Actions proches des points blancs, pour que les déploiements changent vraiment l'état
+        # Actions proches des points blancs
         idx = int(rng.choice(np.nonzero(masque)[0][1:]))
         etat, r, done, info = env.step(env.actions[idx])
         trace.append((idx, r, env.U_courant, info.get("n_white"), etat["b_t"], etat["grille"].copy()))
@@ -82,7 +78,7 @@ def test_equivalence():
     environment_rl.simuler_deploiement = simulation_factice
     env = environment_rl.FerroMobileEnv(scenario="S1", budget=1_000_000.0, t_max=12,
                                         sauvegarder_deploiements_rl=False)
-    # Restreint à quelques centaines d'actions proches de la voie : plus d'effets visibles, test plus court
+    # Quelques centaines d'actions proches de la voie
     jouer(env, 0, 12, verifier=True)
     print("test_equivalence : OK (masque et état identiques à la version d'origine)")
 

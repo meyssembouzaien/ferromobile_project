@@ -1,17 +1,11 @@
 """
-cv_blocks.py : validation croisée spatiale par blocs (Expérience C, niveau 1, tableau 3.16).
+cv_blocks.py : validation croisée spatiale par blocs (Expérience C, tableau 3.16).
 
-    - 4 blocs contigus de la voie (environ 9,6 km), jamais des points isolés ;
-    - pli k : entraînement sur les trois autres blocs, test sur le bloc k ;
-    - budget de chaque bloc proportionnel à ses zones blanches (part de B) ;
-    - pendant l'entraînement, les déploiements dont la couverture pourrait atteindre un
-      point du bloc de test sont masqués. Critère retenu : distance du centre de la
-      cellule au point de test le plus proche <= portée nominale de (g, f). C'est un
-      sur-ensemble de la vraie couverture (la ligne de vue n'est pas testée), donc
-      aucune action d'entraînement ne sert le bloc de test ;
-    - statistiques de normalisation des canaux calculées sur les blocs d'entraînement.
+4 blocs contigus de la voie. Pli k : entraînement sur 3 blocs, test sur le bloc k.
+Budget de chaque bloc proportionnel à ses zones blanches.
+À l'entraînement, les actions qui peuvent atteindre le bloc de test sont masquées.
 
-Lancer : python cv_blocks.py (affiche les 4 plis : points, zones blanches, budgets, actions masquées)
+Lancer : python cv_blocks.py (affiche les 4 plis)
 """
 
 import os
@@ -32,8 +26,7 @@ def blocs_de_points(df_points, n_blocs=N_BLOCS):
 
 
 def preparer_pli(env_base, pli, budget_total, n_blocs=N_BLOCS):
-    """Configuration du pli `pli` (1 à n_blocs). env_base : FerroMobileEnv sur toute la ligne,
-    après reset(). Renvoie un dict utilisable comme arguments de FerroMobileEnv."""
+    """Points, budgets et masque du pli. env_base : environnement de la ligne entière, après reset()."""
     from prepare_data import get_profile
 
     assert 1 <= pli <= n_blocs
@@ -47,7 +40,7 @@ def preparer_pli(env_base, pli, budget_total, n_blocs=N_BLOCS):
     budget_test = budget_total * n_blancs_test / len(blancs)
     budget_train = budget_total * n_blancs_train / len(blancs)
 
-    # Masque d'entraînement : aucune action ne doit pouvoir atteindre un point de test
+    # Masquer les actions qui peuvent atteindre un point de test
     pts = env_base.df_points
     pts_test = pts[pts["point_id"].isin(test) & ~pts["in_tunnel"]]
     x, y = VERS_METRES.transform(pts_test["lon"].values, pts_test["lat"].values)
@@ -81,8 +74,7 @@ def env_entrainement(pli_config, scenario="S1", t_max=150, poids=None, **kwargs)
 
 
 def env_test(pli_config, scenario="S1", t_max=150, poids=None, **kwargs):
-    """Bloc de test : budget de ce bloc, b_t normalisé par le budget d'entraînement du pli,
-    statistiques de normalisation des blocs d'entraînement. Toutes les actions sont permises."""
+    """Environnement du bloc de test (toutes les actions permises)."""
     from environment_rl import FerroMobileEnv
     c = pli_config
     return FerroMobileEnv(scenario=scenario, budget=c["budget_test"], budget_reference=c["budget_train"],

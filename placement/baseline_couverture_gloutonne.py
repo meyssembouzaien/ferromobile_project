@@ -1,18 +1,10 @@
 """
-baseline_couverture_gloutonne.py : Coverage-Greedy (tableau 3.14) joué dans FerroMobileEnv.
+baseline_couverture_gloutonne.py : Coverage-Greedy (tableau 3.14) joué dans l'environnement.
 
-Même règle que diagnostiquer_budget.py (la version utilisée pour le chapitre 4) :
-à chaque étape, le déploiement qui couvre le plus de nouveaux points blancs par euro,
-parmi les cellules contenant un point blanc (puis leur voisinage 3 x 3 si aucune ne
-couvre rien), avec les dix couples (g, f). Arrêt : couverture complète, aucun
-candidat utile, ou budget épuisé.
+À chaque étape : le déploiement qui couvre le plus de nouveaux points blancs par euro.
+Arrêt : couverture complète, aucun candidat utile, ou budget épuisé.
 
-Différence : ici chaque choix est joué dans l'environnement (env.step), donc la même
-fonction sert sur la ligne entière et sur un bloc de test (Expérience C : "Coverage-Greedy
-est relancé sur chaque configuration de test"), et U, r_fin et les transitions sont
-directement ceux de l'environnement.
-
-Lancer : python baseline_couverture_gloutonne.py   (ligne entière, S1, B = 10 M€)
+Lancer : python baseline_couverture_gloutonne.py   (S1, B = 10 M€)
 Sortie : resultats/couverture_gloutonne_resume.csv
 """
 

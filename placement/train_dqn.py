@@ -1,41 +1,18 @@
 """
-train_dqn.py : entraînement du Dueling DQN (ou du Vanilla DQN) sur FerroMobileEnv.
+train_dqn.py : entraînement du Dueling DQN (ou Vanilla DQN) sur FerroMobileEnv.
 
-Configuration du mémoire (section 3.8.3, tableau 4.1) : gamma = 1, Adam 1e-4, Huber,
-batch 32, replay buffer de 2000 transitions, epsilon de 1 à 0,05 en 6000 steps,
-exploration de Boltzmann (T = 1) après 1000 steps uniformes, cible Double DQN,
-réseau cible mis à jour tous les 200 steps, t_max = 150, B = 10 M€, évaluation
-gloutonne et checkpoint tous les 25 épisodes.
+Hyperparamètres : tableau 4.1. Réglages par variables d'environnement :
+    FM_EPISODES   nombre d'épisodes (300)
+    FM_W_W        poids des zones blanches w_W (1)
+    FM_ARCH       dueling ou vanilla
+    FM_EXPLORATION  softmax (Boltzmann) ou uniforme
+    FM_SEED       graine (0)
+    FM_FOLD       pli de validation croisée 1..4 (0 = ligne entière)
+    FM_MAX_HOURS  arrêt propre avant cette durée (11 h sur Kaggle)
+    FM_SYNC       sauvegarde dans un dataset Kaggle privé (1 sur Kaggle)
 
-Réglages sans modifier le code (variables d'environnement) :
-    FM_EPISODES=1000      nombre total d'épisodes (défaut 300)
-    FM_W_W=5              poids w_W des zones blanches dans U (défaut 1, valeur de référence)
-    FM_ARCH=vanilla       DQN sans décomposition V/A (ablation), défaut : dueling
-    FM_EXPLORATION=uniforme   ablation de l'exploration, défaut : softmax (Boltzmann)
-    FM_SEED=1             graine (défaut 0)
-    FM_FOLD=1..4          validation croisée spatiale, pli k (Expérience C, niveau 1) ; défaut : ligne entière
-    FM_SAVE_EVERY=25      checkpoint tous les N épisodes
-    FM_MAX_HOURS=11       arrêt propre (checkpoint + sauvegarde) avant cette durée de session ;
-                          défaut : 11 sur Kaggle, aucune limite ailleurs
-    FM_SYNC=1             sauvegarde dans un dataset Kaggle privé (défaut : 1 sur Kaggle)
-    FM_KAGGLE_DATASET     nom du dataset (défaut : fm-<nom du run>)
-    FM_RUN=nom            nom du run et de son dossier checkpoints/<nom>
-    FM_CHECKPOINTS=dossier  dossier racine des runs (défaut : <projet>/checkpoints)
-Variantes de récompense NON utilisées dans le mémoire (perspectives, section 4.13) :
-    FM_W_TRANS=2          multiplie w_H, w_O, w_T dans U pendant l'entraînement (défaut 1)
-    FM_COST_STEP=0.2      r_t - FM_COST_STEP * coût du step / B (défaut 0)
-
-Journaux (dans le dossier du run) :
-    train_log.csv  : une ligne par épisode
-    eval_log.csv   : une ligne par évaluation gloutonne ; return_ref = U_T - U_0 + r_fin
-                     recalculé avec les poids de référence (tous à 1), comparable aux
-                     autres méthodes du tableau 4.8 quel que soit w_W
-    eval_trace_epN.csv : chaque action de l'évaluation N
-    console.log    : toute la sortie console, toutes sessions confondues
-    run_etat.json  : dernier épisode sauvegardé
-Reprise exacte : poids, réseau cible, optimiseur, epsilon, compteur de steps, états des
-générateurs aléatoires et replay buffer. À la reprise, les lignes des épisodes postérieurs
-au checkpoint sont supprimées (ils sont rejoués), donc aucun épisode n'apparaît deux fois.
+Sorties dans checkpoints/<run>/ : train_log.csv, eval_log.csv, console.log,
+dernier.pt, buffer.npz. Le run reprend seul au dernier checkpoint.
 """
 
 import csv
@@ -82,10 +59,7 @@ PLI = int(os.environ.get("FM_FOLD", 0))
 DUREE_MAX_S = 3600 * float(os.environ.get("FM_MAX_HOURS", 11.0 if SUR_KAGGLE else 0))
 SYNCHRONISER = os.environ.get("FM_SYNC", "1" if SUR_KAGGLE else "0") == "1"
 
-# Poids de U. w_W = 1 est la référence ; w_W = 5 est la configuration principale du
-# chapitre 4 (section 4.6.3). Calcul exact (cellule idéale par segment blanc) : segments
-# dont la couverture isolée fait baisser U, en 3G / 4G / 5G :
-#   w_W = 1 : 20 / 16 / 11 segments sur 32 ;  w_W = 3 : 2 / 2 / 0 ;  w_W = 5 : 2 / 0 / 0.
+# Poids de U : w_W = 1 (référence) ou 5 (run principal, section 4.6.3)
 POIDS_W = float(os.environ.get("FM_W_W", 1.0))
 POIDS_TRANS = float(os.environ.get("FM_W_TRANS", 1.0))
 PENALITE_COUT = float(os.environ.get("FM_COST_STEP", 0.0))
@@ -108,7 +82,7 @@ COLONNES_LOG_EVAL = ["episode", "steps", "reward", "n_white", "cout_eur", "nouve
                      "deploiements", "stop", "r_fin", "qos_mean", "qos_min", "N_H", "N_O", "N_T",
                      "U_final_ref", "return_ref", "temps_decision_s"]
 
-# Ce qui définit le problème d'apprentissage : un checkpoint d'une autre configuration est refusé
+# Un checkpoint d'une autre configuration est refusé à la reprise
 CONFIG_RUN = {"architecture": CLASSE_MODELE.__name__, "poids": POIDS, "exploration": MODE_EXPLORATION,
               "seed": SEED, "penalite_cout": PENALITE_COUT, "pli": PLI, "budget": BUDGET, "scenario": SCENARIO,
               "t_max": T_MAX, "batch": BATCH_SIZE, "lr": LR, "buffer": CAPACITE_BUFFER,
@@ -201,8 +175,7 @@ def verifier_ordre_actions(env, n_configs_radio):
 
 
 def verifier_integration(env, modele, device):
-    """Un reset et un forward, avant tout entraînement. Vérifie aussi que le masque
-    vectorisé est identique à la boucle d'origine sur l'état initial."""
+    """Vérifie un reset, un forward et le masque d'actions avant l'entraînement."""
     assert modele.taille_sortie() == len(env.actions), \
         f"sortie du modèle {modele.taille_sortie()} != {len(env.actions)} actions"
     etat = env.reset()
@@ -233,7 +206,7 @@ def restaurer_etats_aleatoires(etat):
 
 
 def sauver_checkpoint(modele, modele_cible, optimiseur, episode, epsilon, total_steps, n_actions, buffer):
-    """Écritures atomiques : un arrêt pendant la sauvegarde laisse le checkpoint précédent intact."""
+    """Sauvegarde le run. Écriture atomique : l'ancien checkpoint reste valable en cas d'arrêt."""
     from kaggle_sync import ecrire_etat
     os.makedirs(DOSSIER_CHECKPOINTS, exist_ok=True)
     etat = {"modele": modele.state_dict(), "modele_cible": modele_cible.state_dict(),
@@ -308,9 +281,7 @@ def jouer_action(env, action):
 
 
 def episode_glouton(env, modele, device):
-    """Un épisode sans exploration (epsilon = 0). choisir_action tire tout de même un
-    np.random.random() par step (comme la version d'origine) : l'évaluation a lieu aux mêmes
-    épisodes dans un run continu et dans un run repris, donc la reprise reste exacte."""
+    """Un épisode sans exploration (epsilon = 0)."""
     etat, done, t, n_deploiements, n_sites, reward_total, info = env.reset(), False, 0, 0, 0, 0.0, {}
     U0_ref = env.U_reference()
     trace, temps = [], []
@@ -355,8 +326,7 @@ def evaluer_politique_greedy(env, modele, device, episode):
 
 def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
                         episode_depart, epsilon, total_steps, sauvegarde=None, debut_session=None):
-    """Renvoie l'épisode atteint. S'arrête proprement (checkpoint) si la durée de session
-    restante ne suffit plus pour un épisode (FM_MAX_HOURS)."""
+    """Boucle d'entraînement. S'arrête proprement avant FM_MAX_HOURS. Renvoie l'épisode atteint."""
     debut_session = debut_session or time.time()
     durees = []
     n_actions = len(env.actions)
@@ -368,7 +338,7 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
 
     for episode in range(episode_depart, N_EPISODES_TRAIN):
         if DUREE_MAX_S and durees:
-            # Marge : la plus longue des 5 dernières durées, x 2 si une évaluation suit, + 15 min d'envoi
+            # Assez de temps pour un épisode de plus ? (marge de 15 min pour l'envoi)
             prochain = max(durees[-5:]) * (2.0 if (episode + 1) % EVALUER_TOUS_LES_N_EPISODES == 0 else 1.0)
             if time.time() - debut_session + 1.5 * prochain + 900 > DUREE_MAX_S:
                 print(f"\nDurée de session presque atteinte : arrêt propre après l'épisode {episode}. "
@@ -388,7 +358,7 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
             n_sites += nouveau
             n_deploiements += action_idx != 0
 
-            # Masque suivant : sans importance si done (pas de bootstrap), STOP seul par sécurité
+            # Masque de l'état suivant (STOP seul si l'épisode est fini)
             if done:
                 masque_suivant = np.zeros(n_actions, dtype=bool)
                 masque_suivant[0] = True
@@ -424,7 +394,7 @@ def boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
             "stop": int(n_deploiements < t), "r_fin": info.get("r_fin"), "rewards_nuls": n_nuls,
             "perte": perte_moy, "epsilon": epsilon, "total_steps": total_steps, "duree_s": round(duree, 1)})
 
-        # Évaluation avant la sauvegarde : le checkpoint N contient déjà la ligne eval N
+        # Évaluer, puis sauvegarder
         if (episode + 1) % EVALUER_TOUS_LES_N_EPISODES == 0:
             evaluer_politique_greedy(env, modele, device, episode + 1)
         if (episode + 1) % SAUVER_TOUS_LES_N_EPISODES == 0 and episode + 1 < N_EPISODES_TRAIN:
@@ -503,7 +473,7 @@ def main():
     buffer = ReplayBuffer(capacity=CAPACITE_BUFFER, nx=env.grille.nx, ny=env.grille.ny,
                           n_canaux_etat=N_CANAUX_ETAT, n_actions=len(env.actions), n_canaux_fixes=N_CANAUX_FIXES)
     modele_cible.load_state_dict(modele.state_dict())
-    # Chargé après les vérifications : les états aléatoires restaurés ne sont plus perturbés
+    # Reprise depuis le dernier checkpoint s'il existe
     episode_depart, epsilon, total_steps = charger_checkpoint(modele, modele_cible, optimiseur, device,
                                                               len(env.actions), buffer)
     if episode_depart >= N_EPISODES_TRAIN:
@@ -515,7 +485,7 @@ def main():
         atteint = boucle_entrainement(env, modele, modele_cible, buffer, optimiseur, device,
                                       episode_depart, epsilon, total_steps, sauvegarde, debut_session)
     except BaseException as e:
-        # Le dernier checkpoint reste valable ; on envoie au moins les journaux
+        # Envoyer au moins les journaux
         print(f"\nInterruption : {type(e).__name__}: {e}")
         if sauvegarde is not None:
             sauvegarde.envoyer("interruption, journaux seulement")

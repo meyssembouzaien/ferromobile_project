@@ -1,43 +1,13 @@
 """
-environment_rl.py : environnement RL de FerroMobile (§13, §14 du cahier des charges).
+environment_rl.py : environnement RL de FerroMobile (chapitre 3).
 
-Orchestre les modules déjà validés, sans les réimplémenter :
-grid_config, build_state, build_state_dynamic, trajectory_dp,
-simulateur_deploiement, cost_model, utility.
+Utilise les modules déjà validés : grid_config, build_state, build_state_dynamic,
+trajectory_dp, simulateur_deploiement, cost_model, utility.
 
-Trois identités de site, jamais fusionnées :
-    - action RL / déjà déployé : (ix, iy, g, f)
-    - coût (§12)               : (ix, iy)
-    - DP / cellule radio (§9)  : GPS exact (x_s, y_s, o, g, f)
-
-STOP = action d'indice 0.
-dataset_enrichi.csv n'est jamais modifié. Les déploiements simulés
-peuvent être journalisés dans un CSV séparé, un fichier par run_id.
-
-Corrections documentées :
-    - compute_r_fin() appelé en arguments nommés (un appel positionnel
-      avait déjà décalé les arguments sans erreur).
-    - reset() : itertuples() limité aux 8 colonnes utiles (61 colonnes
-      rendaient reset() très lent). Résultat identique.
-    - État à 28 canaux : une carte des mâts construits par le RL. Sans elle, l'agent
-      ne voit pas ses propres antennes (sans opérateur), alors que le coût en dépend (§12).
-    - b_t = budget restant / B_train (équation 3.29 du mémoire), et non / budget de
-      l'épisode : avec B != B_train (Expérience G), b_t peut dépasser 1.
-
-Accélérations sans effet sur les résultats (tests : test_chemins_rapides.py) :
-    - masque de faisabilité vectorisé (numpy) au lieu d'une boucle sur 156 061 actions ;
-    - canaux d'infrastructure calculés une fois par reset (ils ne changent pas : une
-      cellule hypothétique n'a pas d'opérateur) ;
-    - canaux de performance vectorisés (même ordre de sommation) ;
-    - cache des simulations radio : simuler_deploiement() est une fonction pure
-      (shadowing tiré par lien, graine stable), une antenne déjà simulée n'est pas
-      recalculée. Taille : FM_SIM_CACHE entrées (défaut 30000, 0 pour désactiver).
-
-Options pour les Expériences C et F (aucune n'est active par défaut) :
-    - points_evalues : sous-ensemble de points (blocs de la validation croisée spatiale) ;
-    - points_stats : points utilisés pour les statistiques de normalisation des canaux ;
-    - operateurs_exclus : opérateurs retirés du réseau existant (niveau 2) ;
-    - actions_autorisees : masque fixe des actions permises (petite instance, buffer).
+Action : (ix, iy, g, f), ou STOP (indice 0).
+État : 28 canaux sur la grille, plus b_t = budget restant / B_train (éq. 3.29).
+Options pour les Expériences C et F : points_evalues, points_stats,
+operateurs_exclus, actions_autorisees (inactives par défaut).
 """
 
 import os
@@ -82,8 +52,7 @@ for _gen in BANDES_PAR_GENERATION:
 
 STOP = "STOP"
 
-# Cache des simulations radio, partagé par tous les environnements du processus.
-# Clé : (scénario, ix, iy, g, f). Valeur : résultats bruts de simuler_deploiement.
+# Cache des simulations radio : une antenne déjà simulée n'est pas recalculée
 TAILLE_CACHE_SIMULATION = int(os.environ.get("FM_SIM_CACHE", 30000))
 _CACHE_SIMULATION = OrderedDict()
 
@@ -120,8 +89,7 @@ COLONNES_CELLULES = ["point_id", "ant_lat", "ant_lon", "operateur", "generation"
 
 
 class FerroMobileEnv:
-    # R_* rééchelonnés (100/50/20/20 -> 1/0.5/0.2/0.2) pour rester du même
-    # ordre que la somme des r_t (environ 0,1 par épisode). Hiérarchie gardée.
+    # R_* : bonus de r_fin, à l'échelle des r_t
     def __init__(self, scenario="S1", budget=500_000.0, poids=None,
                  Q_critique=0.5, R_couverture=1.0, R_qualite=0.5,
                  R_succes=0.2, R_eff=0.2, t_max=200,
@@ -131,7 +99,7 @@ class FerroMobileEnv:
                  points_evalues=None, points_stats=None, operateurs_exclus=(),
                  actions_autorisees=None):
         self.scenario = scenario
-        # b_t = budget restant / B_train (éq. 3.29) ; B_train = budget de l'épisode par défaut
+        # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
         self.operateurs_exclus = set(operateurs_exclus)
         self.budget_total = budget
@@ -144,7 +112,7 @@ class FerroMobileEnv:
         self.t_max = t_max
         self.sauvegarder_deploiements_rl = sauvegarder_deploiements_rl
 
-        # Suffixe uuid : évite deux run_id identiques créés dans la même seconde
+        # Identifiant unique du run
         self.run_id = run_id if run_id is not None else f"{datetime.now():%Y-%m-%d_%H%M%S}_{uuid4().hex[:8]}"
         self.dataset_enrichi_rl_path = (
             dataset_enrichi_rl_path if dataset_enrichi_rl_path is not None
@@ -158,7 +126,7 @@ class FerroMobileEnv:
         self.df_points = (self.df_base[["point_id", "lat", "lon", "altitude_m", "vegetation", "in_tunnel"]]
                            .drop_duplicates("point_id"))
         self.points_hors_tunnel = set(self.df_points[~self.df_points["in_tunnel"]]["point_id"])
-        # Points de la performance (canaux) : tous, ou le sous-ensemble évalué (Expérience C, niveau 1)
+        # Points évalués : tous, ou un bloc (Expérience C)
         self.df_points_perf = self.df_points
         if points_evalues is not None:
             points_evalues = set(points_evalues)
@@ -212,14 +180,14 @@ class FerroMobileEnv:
 
         df_scenario = self.df_enrichi_complet[self.df_enrichi_complet["scenario_id"] == self.scenario]
         if self.operateurs_exclus:
-            # Niveau 2 : les liens de ces opérateurs disparaissent ; les points restent
+            # Expérience C niveau 2 : on retire les liens de ces opérateurs
             df_scenario = df_scenario[~df_scenario["operateur"].isin(self.operateurs_exclus)]
         # Réseau réel complet (antennes, sites, canaux d'infrastructure) ...
         self.df_reel_complet = df_scenario[(~df_scenario["in_tunnel"]) & (df_scenario["ant_id"].notna())]
         # ... et ses liens vers les points évalués (DP, N_white)
         self.df_reel = self.df_reel_complet[self.df_reel_complet["point_id"].isin(self.points_hors_tunnel)]
 
-        # Cellules réelles par point. CORRECTION : 8 colonnes au lieu de 61 (vitesse)
+        # Cellules réelles par point (8 colonnes utiles seulement)
         self._cells_reelles_par_point = {}
         for pid, lignes in self.df_reel[COLONNES_CELLULES].groupby("point_id"):
             self._cells_reelles_par_point[pid] = [
@@ -236,7 +204,7 @@ class FerroMobileEnv:
 
         self._resultats_hypo = []
 
-        # Réseau réel projeté sur (ix, iy, g, f), sans opérateur (o n'est pas dans l'action)
+        # Réseau réel projeté sur (ix, iy, g, f)
         antennes_uniques = self.df_reel_complet[["ant_id", "ant_lat", "ant_lon", "generation", "bande_mhz"]].drop_duplicates("ant_id")
         self.deploiements_reels = set()
         self.sites_deja_presents = set()
@@ -247,7 +215,7 @@ class FerroMobileEnv:
             self.deploiements_reels.add((c[0], c[1], row.generation, row.bande_mhz))
             self.sites_deja_presents.add(c)
 
-        # Canaux d'infrastructure : fixes (une cellule hypothétique n'a pas d'opérateur)
+        # Canaux d'infrastructure : fixes pendant l'épisode
         self.canaux_infra = construire_canaux_infrastructure(self.grille, self.df_reel_complet)
 
         # État du masque vectorisé
@@ -322,8 +290,7 @@ class FerroMobileEnv:
         return resultat_dp, n_white, n_eval
 
     def U_reference(self):
-        """U du réseau courant avec les poids de référence (tous à 1), quels que soient les
-        poids de l'environnement : sert à comparer les méthodes (tableau 4.8)."""
+        """U avec les poids de référence (tous à 1), pour comparer les méthodes (tableau 4.8)."""
         metriques = normaliser_metriques(self._dernier_resultat_dp, self._dernier_n_eval,
                                          self._dernier_n_white, self.n_total)
         return compute_U(metriques, 1.0, 1.0, 1.0, 1.0, 1.0)
@@ -391,8 +358,7 @@ class FerroMobileEnv:
         return {"grille": etat_spatial, "b_t": b_t, "progression": progression}
 
     def _canaux_performance(self, debit_par_point, qos_par_point):
-        """Version vectorisée de build_state_dynamic.construire_canaux_performance
-        (mêmes conventions (-1, -1) et (0, -1), même ordre de sommation)."""
+        """Canaux de performance (version rapide de construire_canaux_performance)."""
         nx, ny = self.grille.nx, self.grille.ny
         debit = debit_par_point.reindex(self._pid_perf).fillna(0).values
         qos = qos_par_point.reindex(self._pid_perf).values
@@ -408,8 +374,7 @@ class FerroMobileEnv:
         avec_points = n_points > 0
         couverture[avec_points] = n_couverts[avec_points] / n_points[avec_points]
 
-        # Moyenne par cellule avec sum() de Python, dans l'ordre des points : résultat
-        # identique au bit près à la version d'origine (sum() compensé en Python >= 3.12)
+        # sum() de Python : même résultat exact que la version d'origine
         cellules_cov = cellules[couvert]
         qos_cov = qos[dans_grille][couvert].tolist()
         ordre = np.argsort(cellules_cov, kind="stable")
@@ -535,7 +500,7 @@ class FerroMobileEnv:
     def _finaliser(self, r_t_dernier_step):
         cout_total = self.budget_total - self.budget_restant
 
-        # Arguments nommés : un changement de signature lèvera une erreur claire
+        # Arguments nommés pour éviter une erreur d'ordre
         r_fin = compute_r_fin(
             n_white=self._dernier_n_white,
             n_total=self.n_total,

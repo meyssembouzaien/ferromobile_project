@@ -69,9 +69,7 @@ class FerroMobileDuelingDQN(nn.Module):
 
 
 class FerroMobileVanillaDQN(FerroMobileDuelingDQN):
-    """DQN sans décomposition (ablation, Expérience E) : même tronc et mêmes têtes, mais
-    Q(s, a) est lu directement, sans V(s) ni centrage des avantages.
-    Q(s, STOP) vient de tete_stop, Q(s, déploiement) de tete_avantage ; tete_valeur est inutilisée."""
+    """Vanilla DQN (ablation, Expérience E) : même réseau, Q(s, a) lu directement, sans V(s)."""
 
     def forward(self, grille, b_t, progression):
         x = self.tronc(grille)
@@ -124,8 +122,7 @@ def _test_dueling():
 
 
 def _test_champ_recepteur():
-    """Architecture seule (modèle non entraîné) : une perturbation à 30 cellules (7,5 km) peut influencer
-    l'avantage de la cellule centrale, une perturbation à 40 cellules (10 km) ne le peut pas."""
+    """Une cellule voit à 30 cellules (7,5 km), pas à 40 (10 km)."""
     torch.manual_seed(0)
     masque = np.ones((101, 101), dtype=bool)
     modele = FerroMobileDuelingDQN(n_configs_radio=1, corridor_mask=masque)

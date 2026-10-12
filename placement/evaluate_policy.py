@@ -1,24 +1,17 @@
 """
-evaluate_policy.py : évaluation gloutonne d'une politique entraînée, pour les tableaux du chapitre 4.
+evaluate_policy.py : évaluation d'une politique entraînée (tableaux du chapitre 4).
 
-    final       Expérience B, tableau 4.8 : S1, B = 10 M€
-    budget      Expérience G, tableau 4.14 : B = 1, 2, 3, 4, 6, 8, 10, 12 M€ (b_t = B / B_train)
-    operateurs  Expérience C niveau 2, tableau 4.12 : un opérateur retiré à la fois
-    meteo       robustesse, tableau 4.12 : scénarios S2, S3, S4
-    pli         Expérience C niveau 1 : bloc de test du pli --pli k (checkpoint entraîné avec FM_FOLD=k),
-                avec Coverage-Greedy relancé sur le même bloc comme référence
-    petite      Expérience F, tableau 4.11 : petite instance (9 candidats), B = 0,3 et 0,5 M€ ;
-                l'écart à l'optimum est calculé si resultats/petite_instance.csv existe
-                (scripts/experiences/small_instance.py)
+    final       tableau 4.8 : S1, B = 10 M€
+    budget      tableau 4.14 : B de 1 à 12 M€
+    operateurs  tableau 4.12 : un opérateur retiré à la fois
+    meteo       tableau 4.12 : scénarios S2, S3, S4
+    pli         tableau 4.12 : bloc de test du pli --pli k, avec Coverage-Greedy
+    petite      tableau 4.11 : petite instance (9 candidats)
 
-Chaque ligne : zones blanches avant et après, rho (éq. 4.8), coût, sites, QoS moyenne et
-minimale, N_H, N_O, N_T, r_fin, U final et retour avec les poids de référence (tous à 1),
-temps moyen d'une décision (masque + passage avant).
-
-Lancer (depuis placement/, CRC_COVLIB_PATH défini, DEM présent) :
+Lancer (depuis placement/) :
     python evaluate_policy.py <checkpoint.pt> final budget operateurs meteo
-    python evaluate_policy.py <checkpoint_fold2.pt> pli --pli 2
-Sortie : resultats/evaluation_<nom du run>.csv (lignes ajoutées)
+    python evaluate_policy.py <checkpoint_pli2.pt> pli --pli 2
+Sortie : resultats/evaluation_<run>.csv
 """
 
 import argparse
@@ -66,7 +59,7 @@ def evaluer(env, etat_ckpt, classe, device, experience, configuration, extra=Non
 
 
 def petite_instance_actions(env):
-    """Mêmes 9 candidats que small_instance.py : 3 cellules les plus blanches x (3G 900, 4G 800, 5G 700)."""
+    """Les 9 candidats de small_instance.py."""
     from baseline_trajectoire_gloutonne import points_blancs
     env.reset()
     pts = env.df_points[env.df_points.point_id.isin(points_blancs(env))]

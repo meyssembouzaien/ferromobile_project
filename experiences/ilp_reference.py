@@ -1,18 +1,13 @@
 """
-ilp_reference.py : référence exacte (sur un ensemble de candidats) pour le chapitre 4.
+ilp_reference.py : solution exacte de coût minimal (ILP), tableau 4.8 et figure 4.12.
 
-  (P1) set cover : coût minimal pour n_white = 0 ;
-  (P2) couverture maximale sous budget B (courbe coût -> zones blanches).
+  (P1) coût minimal pour n_white = 0
+  (P2) couverture maximale sous un budget B
 
-Valide parce que la couverture est séparable : un point est couvert si AU MOINS UNE antenne lui donne
-debit_adj >= D_COV, et le résultat d'une antenne ne dépend pas des autres (simuler_deploiement).
-Coût identique à cost_model.py : C_site payé une fois par cellule nouvelle, C_radio par (g, f).
-Optimalité garantie SUR L'ENSEMBLE DE CANDIDATS (cellules à <= --rayon cellules d'un point blanc) :
-c'est une borne supérieure du vrai optimum si l'on élargit le rayon ; vérifier la stabilité en rayon.
+Optimal sur l'ensemble des candidats (cellules à --rayon cellules d'un point blanc).
 
-Usage (Kaggle, avec DEM + crc-covlib) : python ilp_reference.py <racine_repo> --rayon 2
-Test de plomberie sans DEM :          python ilp_reference.py <racine_repo> --mock
-Sorties : <racine_repo>/resultats/ilp_*.csv, cache de couverture ilp_couverture_cache.pkl (reprise).
+Lancer (avec DEM et crc-covlib) : python ilp_reference.py <racine_repo> --rayon 2
+Sorties : resultats/ilp_*.csv
 """
 import argparse, os, pickle, sys, time
 import numpy as np
@@ -119,7 +114,7 @@ def modele(budget=None):
     if budget is not None:                                  # coût <= B
         rows += [r] * (nA + nY); cols += list(range(nA + nY)); vals += list(cout_vec[:nA + nY]); lo.append(-np.inf); hi.append(budget); r += 1
     A = sparse.csr_matrix((vals, (rows, cols)), shape=(r, n))
-    obj = cout_vec if budget is None else np.r_[cout_vec[:nA + nY] * 1e-9, [-1.0] * nZ]   # départage : moins cher à couverture égale
+    obj = cout_vec if budget is None else np.r_[cout_vec[:nA + nY] * 1e-9, [-1.0] * nZ]
     res = milp(obj, constraints=LinearConstraint(A, lo, hi), integrality=np.ones(n), bounds=Bounds(0, 1),
                options={"time_limit": a.temps_max_s, "mip_rel_gap": 0.0})
     if res.x is None:

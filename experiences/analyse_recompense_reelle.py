@@ -1,8 +1,10 @@
-"""Analyse EXACTE de la récompense par étape r_t = ΔU sur les données réelles (S1),
-pour une cellule hypothétique idéalisée qui couvre exactement un segment blanc.
-Hypothèse explicite : QoS de la cellule ajoutée = QoS médiane observée des liens couvrants
-réels de la même génération (3G 0.655, 4G 0.847, 5G 0.911). Aucune donnée DEM nécessaire.
-Usage : python analyse_recompense_reelle.py <racine_repo>
+"""
+analyse_recompense_reelle.py : récompense r_t = ΔU d'une cellule qui couvre un segment blanc (S1).
+
+Hypothèse : QoS de la cellule = QoS médiane réelle de sa génération (3G 0.655, 4G 0.847, 5G 0.911).
+Tableau 4.6 et figure 4.5. Pas besoin du DEM.
+
+Lancer : python analyse_recompense_reelle.py <racine_repo>
 """
 import json, os, sys
 import pandas as pd

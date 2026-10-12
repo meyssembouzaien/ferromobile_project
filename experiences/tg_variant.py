@@ -1,8 +1,9 @@
 """
-tg_variant.py : Trajectory-Greedy under one planning-parameter variant (Experiment D).
-Usage (from the repository root):
+tg_variant.py : Trajectory-Greedy avec un paramètre modifié (Expérience D, tableau 4.5).
+
+Lancer (depuis la racine) :
     python experiences/tg_variant.py csite_half | csite_double | wW_double | wW5 | fifth_op
-Outputs: <repo>/resultats/trajectoire_gloutonne_{sites,resume}_<variant>.csv
+Sortie : resultats/trajectoire_gloutonne_*_<variante>.csv
 """
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "placement"))
@@ -16,7 +17,7 @@ if variant == "csite_half":
 elif variant == "csite_double":
     cost_model.C_SITE_EUR = 250_000
 elif variant in ("wW_double", "wW5"):
-    # wW5 : same white-zone weight as the main DQN runs, for a like-for-like comparison
+    # wW5 : même w_W que les runs DQN principaux
     w_W = 2.0 if variant == "wW_double" else 5.0
     Base = environment_rl.FerroMobileEnv
     class Env(Base):
@@ -25,7 +26,7 @@ elif variant in ("wW_double", "wW5"):
             super().__init__(*a, **k)
     environment_rl.FerroMobileEnv = Env
 elif variant == "fifth_op":
-    # hypothetical cells belong to a fifth, neutral operator: entering or leaving them counts as an operator change
+    # Cellules ajoutées = cinquième opérateur (changement d'opérateur compté)
     import simulateur_deploiement
     _orig = simulateur_deploiement.simuler_deploiement
     def _sim(*a, **k):

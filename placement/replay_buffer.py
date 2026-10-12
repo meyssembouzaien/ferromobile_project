@@ -1,21 +1,11 @@
 """
-replay_buffer.py — buffer d'expérience, CPU RAM, float16.
+replay_buffer.py : buffer d'expérience en RAM (float16).
 
-État et état suivant stockés séparément (simple, pas de partage
-d'index entre transitions). Le masque de faisabilité de l'état
-suivant est stocké en bits compressés (8x moins de RAM).
+Les 25 canaux fixes de l'état (9 statiques + 16 d'infrastructure) sont stockés une
+seule fois : environ 0,7 Go au lieu de 6 Go pour 2000 transitions.
+sauver() / charger() : le buffer est gardé dans le checkpoint.
 
-Canaux fixes (n_canaux_fixes) : les 25 premiers canaux de l'état (9 statiques et
-16 d'infrastructure) ne changent jamais pendant un run. Ils sont stockés une seule
-fois, et seuls les 3 canaux dynamiques le sont par transition : environ 0,7 Go au
-lieu de 6 Go pour 2000 transitions. sample() rend exactement les mêmes tenseurs
-(même conversion float16, même tirage aléatoire). push() vérifie que les canaux
-fixes ne changent pas.
-
-sauver() / charger() : fichier .npz compressé (les canaux dynamiques valent
-surtout -1 ou 0 hors de la voie), pour le checkpoint et la sauvegarde Kaggle.
-
-Lancer : python replay_buffer.py (test local, pas de dataset réel).
+Lancer : python replay_buffer.py (tests)
 """
 
 import os
