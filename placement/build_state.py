@@ -59,15 +59,18 @@ def normaliser(valeurs, val_min, val_max):
     return np.clip((valeurs - val_min) / (val_max - val_min), 0.0, 1.0)
 
 
-def construire_canaux_statiques(grille, df_points, df_meteo_scenario):
+def construire_canaux_statiques(grille, df_points, df_meteo_scenario, points_stats=None):
     """Construit les 9 canaux statiques, shape (9, nx, ny).
 
     df_points : point_id, lat, lon, altitude_m, vegetation, in_tunnel
         (un point par ligne, comme dataset_base.csv).
     df_meteo_scenario : point_id, pluie_mm_h, temp_c, DÉJÀ filtré sur un
         seul scénario météo (la météo dépend du scénario, pas juste du point).
+    points_stats : point_id dont les min et max servent à la normalisation
+        (validation croisée spatiale : blocs d'entraînement seulement). None : tous.
     """
     df = df_points.merge(df_meteo_scenario[["point_id", "pluie_mm_h", "temp_c"]], on="point_id")
+    df_stats = df if points_stats is None else df[df["point_id"].isin(points_stats)]
     x, y = VERS_METRES.transform(df["lon"].values, df["lat"].values)
     arbre = cKDTree(np.column_stack([x, y]))
 
@@ -81,7 +84,7 @@ def construire_canaux_statiques(grille, df_points, df_meteo_scenario):
     canaux = np.zeros((9, grille.nx, grille.ny), dtype=float)
 
     altitude = df["altitude_m"].values[indices_plus_proche]
-    canaux[0] = normaliser(altitude, df["altitude_m"].min(), df["altitude_m"].max()).reshape(grille.nx, grille.ny)
+    canaux[0] = normaliser(altitude, df_stats["altitude_m"].min(), df_stats["altitude_m"].max()).reshape(grille.nx, grille.ny)
 
     # Végétation, one-hot : un canal par catégorie (indices 1 à 4).
     vegetation_plus_proche = df["vegetation"].values[indices_plus_proche]
@@ -93,10 +96,10 @@ def construire_canaux_statiques(grille, df_points, df_meteo_scenario):
     canaux[6] = normaliser(distances, 0, 10_000).reshape(grille.nx, grille.ny)
 
     pluie = df["pluie_mm_h"].values[indices_plus_proche]
-    canaux[7] = normaliser(pluie, df["pluie_mm_h"].min(), df["pluie_mm_h"].max()).reshape(grille.nx, grille.ny)
+    canaux[7] = normaliser(pluie, df_stats["pluie_mm_h"].min(), df_stats["pluie_mm_h"].max()).reshape(grille.nx, grille.ny)
 
     temp = df["temp_c"].values[indices_plus_proche]
-    canaux[8] = normaliser(temp, df["temp_c"].min(), df["temp_c"].max()).reshape(grille.nx, grille.ny)
+    canaux[8] = normaliser(temp, df_stats["temp_c"].min(), df_stats["temp_c"].max()).reshape(grille.nx, grille.ny)
 
     # Tunnel : localisé, pas "le plus proche". On regroupe les points par
     # cellule (comme pour couverture/QoS) et on marque 1 si au moins un
