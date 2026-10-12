@@ -37,6 +37,8 @@ def resume_episode(env, info, reward_total, n_steps, duree):
             "qos_mean": dp["qos_mean"], "qos_min": dp["qos_min"],
             "N_H": dp["N_H"], "N_O": dp["N_O"], "N_T": dp["N_T"],
             "r_fin": info["r_fin"], "reward_total": reward_total,
+            "U_final_ref": env.U_reference(),
+            "return_ref": env.U_reference() - env.U0_reference + info["r_fin"],
             "n_steps": n_steps, "duree_s": round(duree)}
 
 
