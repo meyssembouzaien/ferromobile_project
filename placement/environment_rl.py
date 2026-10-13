@@ -97,7 +97,7 @@ class FerroMobileEnv:
                  sauvegarder_deploiements_rl=True, dataset_enrichi_rl_path=None,
                  run_id=None, episode_id=None, budget_reference=None,
                  points_evalues=None, points_stats=None, operateurs_exclus=(),
-                 actions_autorisees=None):
+                 actions_autorisees=None, stop_si_couvert=False):
         self.scenario = scenario
         # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
@@ -110,6 +110,7 @@ class FerroMobileEnv:
         self.R_succes = R_succes
         self.R_eff = R_eff
         self.t_max = t_max
+        self.stop_si_couvert = stop_si_couvert   # True : STOP permis seulement à 0 zone blanche
         self.sauvegarder_deploiements_rl = sauvegarder_deploiements_rl
 
         # Identifiant unique du run
@@ -306,7 +307,7 @@ class FerroMobileEnv:
     def _est_faisable(self, action):
         """Infaisable si (ix, iy, g, f) existe déjà ou si le budget ne suffit pas."""
         if action == STOP:
-            return True
+            return self._stop_permis(self._actions_faisables()[1:].any())
         if self.actions_autorisees is not None and not self.actions_autorisees[self.action_index[action]]:
             return False
         ix, iy, g, f = action
@@ -323,7 +324,15 @@ class FerroMobileEnv:
         masque[1:] = (~self._deploye[1:]) & (cout <= self.budget_restant)
         if self.actions_autorisees is not None:
             masque &= self.actions_autorisees
+        masque[0] = self._stop_permis(masque[1:].any())
         return masque
+
+    def _stop_permis(self, deploiement_possible):
+        """STOP toujours permis, sauf avec stop_si_couvert : seulement à 0 zone blanche
+        (ou si plus aucun déploiement n'est faisable)."""
+        if not self.stop_si_couvert:
+            return True
+        return self._dernier_n_white == 0 or not deploiement_possible
 
     def _actions_faisables_reference(self):
         """Version d'origine (boucle Python), gardée pour les tests d'équivalence."""

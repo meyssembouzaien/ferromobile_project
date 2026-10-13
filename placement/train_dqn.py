@@ -10,6 +10,8 @@ Hyperparamètres : tableau 4.1. Réglages par variables d'environnement :
     FM_FOLD       pli de validation croisée 1..4 (0 = ligne entière)
     FM_MAX_HOURS  arrêt propre avant cette durée (11 h sur Kaggle)
     FM_SYNC       sauvegarde dans un dataset Kaggle privé (1 sur Kaggle)
+    FM_STOP_COVERED  1 : STOP permis seulement à 0 zone blanche (0 par défaut)
+    FM_INIT_FROM  checkpoint .pt dont on reprend les poids pour un nouveau run (affinage)
 
 Sorties dans checkpoints/<run>/ : train_log.csv, eval_log.csv, console.log,
 dernier.pt, buffer.npz. Le run reprend seul au dernier checkpoint.
@@ -63,11 +65,15 @@ SYNCHRONISER = os.environ.get("FM_SYNC", "1" if SUR_KAGGLE else "0") == "1"
 POIDS_W = float(os.environ.get("FM_W_W", 1.0))
 POIDS_TRANS = float(os.environ.get("FM_W_TRANS", 1.0))
 PENALITE_COUT = float(os.environ.get("FM_COST_STEP", 0.0))
+STOP_SI_COUVERT = os.environ.get("FM_STOP_COVERED", "0") == "1"
+INIT_DEPUIS = os.environ.get("FM_INIT_FROM", "")
 POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_TRANS, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
 
 _SUFFIXE = ((f"_wT{POIDS_TRANS:g}" if POIDS_TRANS != 1.0 else "")
             + (f"_cost{PENALITE_COUT:g}" if PENALITE_COUT else "")
-            + (f"_fold{PLI}" if PLI else ""))
+            + (f"_fold{PLI}" if PLI else "")
+            + ("_stopcov" if STOP_SI_COUVERT else "")
+            + ("_ft" if INIT_DEPUIS else ""))
 NOM_RUN = os.environ.get("FM_RUN", f"{ARCHITECTURE}_{MODE_EXPLORATION}_wW{POIDS_W:g}{_SUFFIXE}_seed{SEED}")
 DOSSIER_CHECKPOINTS = os.path.join(os.environ.get("FM_CHECKPOINTS", os.path.join(RACINE_PROJET, "checkpoints")),
                                    NOM_RUN)
@@ -87,6 +93,11 @@ CONFIG_RUN = {"architecture": CLASSE_MODELE.__name__, "poids": POIDS, "explorati
               "seed": SEED, "penalite_cout": PENALITE_COUT, "pli": PLI, "budget": BUDGET, "scenario": SCENARIO,
               "t_max": T_MAX, "batch": BATCH_SIZE, "lr": LR, "buffer": CAPACITE_BUFFER,
               "n_steps_exploration": N_STEPS_EXPLORATION, "maj_cible": MAJ_CIBLE_TOUS_LES_N_STEPS}
+# Clés ajoutées seulement si activées : les anciens checkpoints restent compatibles
+if STOP_SI_COUVERT:
+    CONFIG_RUN["stop_si_couvert"] = True
+if INIT_DEPUIS:
+    CONFIG_RUN["init_depuis"] = os.path.basename(os.path.dirname(INIT_DEPUIS))
 
 
 class Console:
@@ -184,7 +195,7 @@ def verifier_integration(env, modele, device):
         q = modele(*etat_vers_tenseurs(etat, device))
     assert q.shape == (1, len(env.actions)) and torch.isfinite(q).all()
     masque = env._actions_faisables()
-    assert masque.shape == (len(env.actions),) and masque[0]
+    assert masque.shape == (len(env.actions),) and (masque[0] or env.stop_si_couvert)
     assert np.array_equal(masque, env._actions_faisables_reference()), "masque vectorisé différent"
     print(f"verifier_integration : OK (état {etat['grille'].shape}, |A| = {len(env.actions)}, "
           f"{int(masque.sum())} actions faisables)")
@@ -250,6 +261,17 @@ def charger_checkpoint(modele, modele_cible, optimiseur, device, n_actions, buff
         print("  ATTENTION : pas de replay buffer sauvegardé, la reprise n'est pas exacte")
     print(f"Reprise à l'épisode {etat['episode']}, epsilon = {etat['epsilon']:.3f}")
     return etat["episode"], etat["epsilon"], etat["total_steps"]
+
+
+def initialiser_depuis(chemin, modele, modele_cible, device):
+    """Affinage : poids d'un autre run, optimiseur et buffer neufs, epsilon au plancher."""
+    etat = torch.load(chemin, map_location=device, weights_only=False)
+    if etat.get("architecture") != type(modele).__name__:
+        raise RuntimeError(f"FM_INIT_FROM : architecture {etat.get('architecture')}, attendu {type(modele).__name__}")
+    modele.load_state_dict(etat["modele"])
+    modele_cible.load_state_dict(etat["modele"])
+    print(f"Affinage : poids de {chemin} (épisode {etat['episode']}), epsilon = {EPSILON_FIN}")
+    return 0, EPSILON_FIN, N_STEPS_EXPLORATION
 
 
 def preparer_log(chemin, colonnes, dernier_episode):
@@ -420,7 +442,7 @@ def creer_environnement():
     from environment_rl import FerroMobileEnv
     if not PLI:
         return FerroMobileEnv(scenario=SCENARIO, budget=BUDGET, t_max=T_MAX, poids=POIDS,
-                              sauvegarder_deploiements_rl=False)
+                              sauvegarder_deploiements_rl=False, stop_si_couvert=STOP_SI_COUVERT)
     import cv_blocks
     base = FerroMobileEnv(scenario=SCENARIO, budget=BUDGET, t_max=T_MAX, sauvegarder_deploiements_rl=False)
     base.reset()
@@ -455,7 +477,8 @@ def main():
     print(f"Device : {device} | architecture : {ARCHITECTURE} | exploration : {MODE_EXPLORATION} | "
           f"seed : {SEED} | poids : {POIDS} | coût dans r_t : {PENALITE_COUT} | pli : {PLI or 'aucun'} | "
           f"épisodes : {N_EPISODES_TRAIN} | run : {DOSSIER_CHECKPOINTS} | "
-          f"limite de session : {DUREE_MAX_S / 3600:.1f} h | sauvegarde Kaggle : "
+          f"limite de session : {DUREE_MAX_S / 3600:.1f} h | STOP seulement à 0 zone blanche : "
+          f"{'oui' if STOP_SI_COUVERT else 'non'} | sauvegarde Kaggle : "
           f"{'oui' if sauvegarde and sauvegarde.actif else 'non'}")
     with open(os.path.join(DOSSIER_CHECKPOINTS, "config_run.json"), "w") as f:
         json.dump({**CONFIG_RUN, "episodes": N_EPISODES_TRAIN, "run": NOM_RUN}, f, indent=1)
@@ -476,6 +499,8 @@ def main():
     # Reprise depuis le dernier checkpoint s'il existe
     episode_depart, epsilon, total_steps = charger_checkpoint(modele, modele_cible, optimiseur, device,
                                                               len(env.actions), buffer)
+    if episode_depart == 0 and INIT_DEPUIS:
+        episode_depart, epsilon, total_steps = initialiser_depuis(INIT_DEPUIS, modele, modele_cible, device)
     if episode_depart >= N_EPISODES_TRAIN:
         print(f"Run déjà terminé ({episode_depart} épisodes). Augmenter FM_EPISODES pour continuer.")
         return
