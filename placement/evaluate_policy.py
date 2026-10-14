@@ -87,7 +87,12 @@ def main():
     print(f"Politique : {args.checkpoint} ({etat_ckpt['architecture']}, épisode {etat_ckpt['episode']}, "
           f"poids d'entraînement {etat_ckpt.get('poids')})")
 
+    # Options d'environnement du run (masque, STOP, r_fin), lues dans le checkpoint
+    options = {k: True for k in ("stop_si_couvert", "masque_utile", "r_fin_blancs_initiaux")
+               if (etat_ckpt.get("config") or {}).get(k)}
+
     def env_(**k):
+        k = {**options, **k}
         k.setdefault("scenario", "S1")
         k.setdefault("budget", B_TRAIN)
         k.setdefault("budget_reference", B_TRAIN)
@@ -115,9 +120,9 @@ def main():
             base.reset()
             config = cv_blocks.preparer_pli(base, args.pli, B_TRAIN)
             del base
-            lignes.append(evaluer(cv_blocks.env_test(config), etat_ckpt, classe, device, "pli",
+            lignes.append(evaluer(cv_blocks.env_test(config, **options), etat_ckpt, classe, device, "pli",
                                   f"pli {args.pli}, bloc de test", {"budget_eur": config["budget_test"]}))
-            env_cg = cv_blocks.env_test(config)
+            env_cg = cv_blocks.env_test(config, **options)
             env_cg.reset()
             n_avant = env_cg._dernier_n_white
             resume, _ = couverture_gloutonne(env_cg, verbeux=False)

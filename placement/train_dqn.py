@@ -11,6 +11,8 @@ Hyperparamètres : tableau 4.1. Réglages par variables d'environnement :
     FM_MAX_HOURS  arrêt propre avant cette durée (11 h sur Kaggle)
     FM_SYNC       sauvegarde dans un dataset Kaggle privé (1 sur Kaggle)
     FM_STOP_COVERED  1 : STOP permis seulement à 0 zone blanche (0 par défaut)
+    FM_USEFUL_MASK   1 : seules les cellules à portée d'un point blanc restant (0 par défaut)
+    FM_RFIN_WHITE0   1 : r_fin normalisé par les zones blanches initiales (0 par défaut)
     FM_INIT_FROM  checkpoint .pt dont on reprend les poids pour un nouveau run (affinage)
 
 Sorties dans checkpoints/<run>/ : train_log.csv, eval_log.csv, console.log,
@@ -66,6 +68,11 @@ POIDS_W = float(os.environ.get("FM_W_W", 1.0))
 POIDS_TRANS = float(os.environ.get("FM_W_TRANS", 1.0))
 PENALITE_COUT = float(os.environ.get("FM_COST_STEP", 0.0))
 STOP_SI_COUVERT = os.environ.get("FM_STOP_COVERED", "0") == "1"
+MASQUE_UTILE = os.environ.get("FM_USEFUL_MASK", "0") == "1"
+R_FIN_BLANCS_INITIAUX = os.environ.get("FM_RFIN_WHITE0", "0") == "1"
+# Options de l'environnement (seulement celles activées)
+OPTIONS_ENV = {k: True for k, v in [("stop_si_couvert", STOP_SI_COUVERT), ("masque_utile", MASQUE_UTILE),
+                                    ("r_fin_blancs_initiaux", R_FIN_BLANCS_INITIAUX)] if v}
 INIT_DEPUIS = os.environ.get("FM_INIT_FROM", "")
 POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_TRANS, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
 
@@ -73,6 +80,8 @@ _SUFFIXE = ((f"_wT{POIDS_TRANS:g}" if POIDS_TRANS != 1.0 else "")
             + (f"_cost{PENALITE_COUT:g}" if PENALITE_COUT else "")
             + (f"_fold{PLI}" if PLI else "")
             + ("_stopcov" if STOP_SI_COUVERT else "")
+            + ("_mask" if MASQUE_UTILE else "")
+            + ("_rfw0" if R_FIN_BLANCS_INITIAUX else "")
             + ("_ft" if INIT_DEPUIS else ""))
 NOM_RUN = os.environ.get("FM_RUN", f"{ARCHITECTURE}_{MODE_EXPLORATION}_wW{POIDS_W:g}{_SUFFIXE}_seed{SEED}")
 DOSSIER_CHECKPOINTS = os.path.join(os.environ.get("FM_CHECKPOINTS", os.path.join(RACINE_PROJET, "checkpoints")),
@@ -94,8 +103,7 @@ CONFIG_RUN = {"architecture": CLASSE_MODELE.__name__, "poids": POIDS, "explorati
               "t_max": T_MAX, "batch": BATCH_SIZE, "lr": LR, "buffer": CAPACITE_BUFFER,
               "n_steps_exploration": N_STEPS_EXPLORATION, "maj_cible": MAJ_CIBLE_TOUS_LES_N_STEPS}
 # Clés ajoutées seulement si activées : les anciens checkpoints restent compatibles
-if STOP_SI_COUVERT:
-    CONFIG_RUN["stop_si_couvert"] = True
+CONFIG_RUN.update(OPTIONS_ENV)
 if INIT_DEPUIS:
     CONFIG_RUN["init_depuis"] = os.path.basename(os.path.dirname(INIT_DEPUIS))
 
@@ -442,7 +450,7 @@ def creer_environnement():
     from environment_rl import FerroMobileEnv
     if not PLI:
         return FerroMobileEnv(scenario=SCENARIO, budget=BUDGET, t_max=T_MAX, poids=POIDS,
-                              sauvegarder_deploiements_rl=False, stop_si_couvert=STOP_SI_COUVERT)
+                              sauvegarder_deploiements_rl=False, **OPTIONS_ENV)
     import cv_blocks
     base = FerroMobileEnv(scenario=SCENARIO, budget=BUDGET, t_max=T_MAX, sauvegarder_deploiements_rl=False)
     base.reset()
@@ -451,7 +459,7 @@ def creer_environnement():
           f"({config['n_blancs_train']} blancs), budget {config['budget_train'] / 1e6:.2f} M€, "
           f"{100 * config['part_masquee']:.0f} % des actions masquées (portée vers le bloc de test)")
     del base
-    return cv_blocks.env_entrainement(config, scenario=SCENARIO, t_max=T_MAX, poids=POIDS)
+    return cv_blocks.env_entrainement(config, scenario=SCENARIO, t_max=T_MAX, poids=POIDS, **OPTIONS_ENV)
 
 
 def main():
@@ -478,7 +486,7 @@ def main():
           f"seed : {SEED} | poids : {POIDS} | coût dans r_t : {PENALITE_COUT} | pli : {PLI or 'aucun'} | "
           f"épisodes : {N_EPISODES_TRAIN} | run : {DOSSIER_CHECKPOINTS} | "
           f"limite de session : {DUREE_MAX_S / 3600:.1f} h | STOP seulement à 0 zone blanche : "
-          f"{'oui' if STOP_SI_COUVERT else 'non'} | sauvegarde Kaggle : "
+          f"{'oui' if STOP_SI_COUVERT else 'non'} | options env : {OPTIONS_ENV or 'aucune'} | sauvegarde Kaggle : "
           f"{'oui' if sauvegarde and sauvegarde.actif else 'non'}")
     with open(os.path.join(DOSSIER_CHECKPOINTS, "config_run.json"), "w") as f:
         json.dump({**CONFIG_RUN, "episodes": N_EPISODES_TRAIN, "run": NOM_RUN}, f, indent=1)
