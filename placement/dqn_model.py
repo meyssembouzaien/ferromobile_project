@@ -22,13 +22,13 @@ DILATATIONS = (1, 2, 4, 8, 16)
 
 class FerroMobileDuelingDQN(nn.Module):
 
-    def __init__(self, n_configs_radio, corridor_mask, n_canaux=N_CANAUX_ETAT, largeur=64):
+    def __init__(self, n_configs_radio, corridor_mask, n_canaux=N_CANAUX_ETAT, largeur=64, dilatations=DILATATIONS):
         super().__init__()
         self.n_configs_radio = n_configs_radio
 
         # Tronc convolutif dilaté : même taille de grille en sortie (padding = dilatation)
         couches, entree = [], n_canaux
-        for d in DILATATIONS:
+        for d in dilatations:
             couches += [nn.Conv2d(entree, largeur, kernel_size=3, padding=d, dilation=d), nn.ReLU()]
             entree = largeur
         self.tronc = nn.Sequential(*couches)

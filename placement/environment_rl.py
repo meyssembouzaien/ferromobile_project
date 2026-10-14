@@ -98,7 +98,7 @@ class FerroMobileEnv:
                  run_id=None, episode_id=None, budget_reference=None,
                  points_evalues=None, points_stats=None, operateurs_exclus=(),
                  actions_autorisees=None, stop_si_couvert=False, masque_utile=False,
-                 r_fin_blancs_initiaux=False):
+                 r_fin_blancs_initiaux=False, canal_couverture=False, chemin_couverture=None):
         self.scenario = scenario
         # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
@@ -114,6 +114,9 @@ class FerroMobileEnv:
         self.stop_si_couvert = stop_si_couvert   # True : STOP permis seulement à 0 zone blanche
         self.masque_utile = masque_utile         # True : seules les cellules à portée d'un point blanc
         self.r_fin_blancs_initiaux = r_fin_blancs_initiaux   # True : r_fin normalisé par les blancs initiaux
+        self.canal_couverture = canal_couverture  # True : 3 canaux de couverture potentielle (un par génération)
+        self.chemin_couverture = chemin_couverture
+        self._couverture = None
         self.sauvegarder_deploiements_rl = sauvegarder_deploiements_rl
 
         # Identifiant unique du run
@@ -254,6 +257,8 @@ class FerroMobileEnv:
         self._dernier_n_eval = n_eval
         self.n_white_initial = n_white
         self._maj_actions_utiles()
+        if self.canal_couverture and self._couverture is None:
+            self._preparer_couverture()
         self.U_courant = self._calculer_U(resultat_dp, n_eval, n_white)
         self.U0_reference = self.U_reference()
 
@@ -365,6 +370,35 @@ class FerroMobileEnv:
             np.minimum(d_min, haversine_km_vec(la, lo, self._lat_cellules, self._lon_cellules), out=d_min)
         self._utile = d_min[self._cellule_vers_unique] <= self._portee_action
 
+    def _preparer_couverture(self):
+        """Lit (ou calcule une fois) portée + LOS cellule -> point blanc, par génération."""
+        import couverture_potentielle as cp
+        d = cp.charger_ou_calculer(self, self.chemin_couverture or cp.CHEMIN_DEFAUT)
+        manquants = set(self._points_blancs) - set(d["points"].tolist())
+        if manquants:
+            raise RuntimeError(f"Fichier de couverture potentielle calculé pour d'autres points ({len(manquants)} "
+                               "points blancs absents) : le supprimer ou donner chemin_couverture.")
+        self._couverture = {
+            "cellules": d["cellules"],
+            "index_point": {p: j for j, p in enumerate(d["points"].tolist())},
+            # A_g[c, p] = 1 si une antenne de génération g en c couvrirait p (portée max de g + LOS)
+            "A": [((d[f"los_{g}"]) & (d["dist_km"] <= max(get_portee_km(g, f) for f in BANDES_PAR_GENERATION[g])))
+                  .astype(np.float32) for g in sorted(BANDES_PAR_GENERATION)],
+        }
+
+    def _canaux_couverture(self):
+        """Par génération : nombre de points encore blancs que chaque cellule couvrirait (/ 50)."""
+        c = self._couverture
+        blancs = np.zeros(len(c["index_point"]), dtype=np.float32)
+        for p in self._points_blancs:
+            j = c["index_point"].get(p)
+            if j is not None:
+                blancs[j] = 1.0
+        canaux = np.zeros((len(c["A"]), self.grille.nx * self.grille.ny))
+        for k, A in enumerate(c["A"]):
+            canaux[k, c["cellules"]] = A @ blancs / 50.0
+        return canaux.reshape(len(c["A"]), self.grille.nx, self.grille.ny)
+
     def _stop_permis(self, deploiement_possible):
         """STOP toujours permis, sauf avec stop_si_couvert : seulement à 0 zone blanche
         (ou si plus aucun déploiement n'est faisable)."""
@@ -399,7 +433,8 @@ class FerroMobileEnv:
         canaux_perf = self._canaux_performance(debit_combine, meilleure_qos)
 
         canal_mats = construire_canal_mats_rl(self.grille, self.infrastructure_deployee)
-        etat_spatial = np.concatenate([self.canaux_statiques, canaux_infra, canaux_perf, canal_mats], axis=0)
+        etat_spatial = np.concatenate([self.canaux_statiques, canaux_infra, canaux_perf, canal_mats]
+                                      + ([self._canaux_couverture()] if self.canal_couverture else []), axis=0)
         b_t = self.budget_restant / self.budget_reference
         progression = self.t / self.t_max
         return {"grille": etat_spatial, "b_t": b_t, "progression": progression}

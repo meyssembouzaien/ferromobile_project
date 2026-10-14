@@ -13,6 +13,8 @@ Hyperparamètres : tableau 4.1. Réglages par variables d'environnement :
     FM_STOP_COVERED  1 : STOP permis seulement à 0 zone blanche (0 par défaut)
     FM_USEFUL_MASK   1 : seules les cellules à portée d'un point blanc restant (0 par défaut)
     FM_RFIN_WHITE0   1 : r_fin normalisé par les zones blanches initiales (0 par défaut)
+    FM_COVER_CHANNEL 1 : 3 canaux de couverture potentielle (portée + LOS), un par génération (0 par défaut)
+    FM_WIDE          1 : tronc avec une dilatation 32 en plus (vue d'environ 32 km) (0 par défaut)
     FM_INIT_FROM  checkpoint .pt dont on reprend les poids pour un nouveau run (affinage)
 
 Sorties dans checkpoints/<run>/ : train_log.csv, eval_log.csv, console.log,
@@ -30,7 +32,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dqn_model import FerroMobileDuelingDQN, FerroMobileVanillaDQN, N_CANAUX_ETAT
+from dqn_model import FerroMobileDuelingDQN, FerroMobileVanillaDQN, N_CANAUX_ETAT, DILATATIONS
 from replay_buffer import ReplayBuffer
 
 CE_FICHIER = os.path.dirname(os.path.abspath(__file__))
@@ -70,9 +72,14 @@ PENALITE_COUT = float(os.environ.get("FM_COST_STEP", 0.0))
 STOP_SI_COUVERT = os.environ.get("FM_STOP_COVERED", "0") == "1"
 MASQUE_UTILE = os.environ.get("FM_USEFUL_MASK", "0") == "1"
 R_FIN_BLANCS_INITIAUX = os.environ.get("FM_RFIN_WHITE0", "0") == "1"
+CANAL_COUVERTURE = os.environ.get("FM_COVER_CHANNEL", "0") == "1"
+VUE_LARGE = os.environ.get("FM_WIDE", "0") == "1"
+N_CANAUX = N_CANAUX_ETAT + (3 if CANAL_COUVERTURE else 0)
+OPTIONS_MODELE = {"n_canaux": N_CANAUX, "dilatations": DILATATIONS + ((32,) if VUE_LARGE else ())}
 # Options de l'environnement (seulement celles activées)
 OPTIONS_ENV = {k: True for k, v in [("stop_si_couvert", STOP_SI_COUVERT), ("masque_utile", MASQUE_UTILE),
-                                    ("r_fin_blancs_initiaux", R_FIN_BLANCS_INITIAUX)] if v}
+                                    ("r_fin_blancs_initiaux", R_FIN_BLANCS_INITIAUX),
+                                    ("canal_couverture", CANAL_COUVERTURE)] if v}
 INIT_DEPUIS = os.environ.get("FM_INIT_FROM", "")
 POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_TRANS, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
 
@@ -82,6 +89,8 @@ _SUFFIXE = ((f"_wT{POIDS_TRANS:g}" if POIDS_TRANS != 1.0 else "")
             + ("_stopcov" if STOP_SI_COUVERT else "")
             + ("_mask" if MASQUE_UTILE else "")
             + ("_rfw0" if R_FIN_BLANCS_INITIAUX else "")
+            + ("_cov" if CANAL_COUVERTURE else "")
+            + ("_wide" if VUE_LARGE else "")
             + ("_ft" if INIT_DEPUIS else ""))
 NOM_RUN = os.environ.get("FM_RUN", f"{ARCHITECTURE}_{MODE_EXPLORATION}_wW{POIDS_W:g}{_SUFFIXE}_seed{SEED}")
 DOSSIER_CHECKPOINTS = os.path.join(os.environ.get("FM_CHECKPOINTS", os.path.join(RACINE_PROJET, "checkpoints")),
@@ -104,6 +113,8 @@ CONFIG_RUN = {"architecture": CLASSE_MODELE.__name__, "poids": POIDS, "explorati
               "n_steps_exploration": N_STEPS_EXPLORATION, "maj_cible": MAJ_CIBLE_TOUS_LES_N_STEPS}
 # Clés ajoutées seulement si activées : les anciens checkpoints restent compatibles
 CONFIG_RUN.update(OPTIONS_ENV)
+if VUE_LARGE:
+    CONFIG_RUN["vue_large"] = True
 if INIT_DEPUIS:
     CONFIG_RUN["init_depuis"] = os.path.basename(os.path.dirname(INIT_DEPUIS))
 
@@ -494,15 +505,15 @@ def main():
     env = creer_environnement()
     n_configs = sum(len(v) for v in BANDES_PAR_GENERATION.values())
 
-    modele = CLASSE_MODELE(n_configs, env.grille.corridor_mask).to(device)
-    modele_cible = CLASSE_MODELE(n_configs, env.grille.corridor_mask).to(device)
+    modele = CLASSE_MODELE(n_configs, env.grille.corridor_mask, **OPTIONS_MODELE).to(device)
+    modele_cible = CLASSE_MODELE(n_configs, env.grille.corridor_mask, **OPTIONS_MODELE).to(device)
     optimiseur = torch.optim.Adam(modele.parameters(), lr=LR)
 
     verifier_integration(env, modele, device)
     verifier_ordre_actions(env, n_configs)
 
     buffer = ReplayBuffer(capacity=CAPACITE_BUFFER, nx=env.grille.nx, ny=env.grille.ny,
-                          n_canaux_etat=N_CANAUX_ETAT, n_actions=len(env.actions), n_canaux_fixes=N_CANAUX_FIXES)
+                          n_canaux_etat=N_CANAUX, n_actions=len(env.actions), n_canaux_fixes=N_CANAUX_FIXES)
     modele_cible.load_state_dict(modele.state_dict())
     # Reprise depuis le dernier checkpoint s'il existe
     episode_depart, epsilon, total_steps = charger_checkpoint(modele, modele_cible, optimiseur, device,

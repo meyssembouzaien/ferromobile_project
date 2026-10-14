@@ -42,7 +42,10 @@ def charger_politique(chemin, device):
 def evaluer(env, etat_ckpt, classe, device, experience, configuration, extra=None):
     from environment_rl import BANDES_PAR_GENERATION
     n_configs = sum(len(v) for v in BANDES_PAR_GENERATION.values())
-    modele = classe(n_configs, env.grille.corridor_mask).to(device)
+    config = etat_ckpt.get("config") or {}
+    modele = classe(n_configs, env.grille.corridor_mask,
+                    n_canaux=T.N_CANAUX_ETAT + (3 if config.get("canal_couverture") else 0),
+                    dilatations=T.DILATATIONS + ((32,) if config.get("vue_large") else ())).to(device)
     modele.load_state_dict(etat_ckpt["modele"])
     modele.eval()
     env.reset()
@@ -88,7 +91,7 @@ def main():
           f"poids d'entraînement {etat_ckpt.get('poids')})")
 
     # Options d'environnement du run (masque, STOP, r_fin), lues dans le checkpoint
-    options = {k: True for k in ("stop_si_couvert", "masque_utile", "r_fin_blancs_initiaux")
+    options = {k: True for k in ("stop_si_couvert", "masque_utile", "r_fin_blancs_initiaux", "canal_couverture")
                if (etat_ckpt.get("config") or {}).get(k)}
 
     def env_(**k):
