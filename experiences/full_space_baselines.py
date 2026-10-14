@@ -11,7 +11,7 @@ exact coverage (exact = range + LOS + debit_adj >= D_COV after rain and ARQ, fro
 Both plans are then replayed in the environment (same metrics as the other baselines).
 
 Usage (Kaggle, with DEM + crc-covlib) :
-  python full_space_baselines.py <repo_root> --couv <coverage.npz> --lignes <rows.csv> --colonnes <cols.csv>
+  python full_space_baselines.py <repo_root> --couv couverture_potentielle_S1.npz
 Outputs : <repo_root>/resultats/full_space_*.csv
 """
 import argparse, heapq, json, os, sys, time
@@ -22,9 +22,7 @@ from scipy.optimize import milp, LinearConstraint, Bounds
 
 ap = argparse.ArgumentParser()
 ap.add_argument("racine")
-ap.add_argument("--couv", required=True)        # CSR, rows = deployments, cols = white points
-ap.add_argument("--lignes", required=True)      # row -> ix, iy, gen, band
-ap.add_argument("--colonnes", required=True)    # col -> point_id
+ap.add_argument("--couv", required=True)        # couverture_potentielle_S1.npz
 ap.add_argument("--temps_max_s", type=int, default=5400)
 a = ap.parse_args()
 
@@ -50,20 +48,28 @@ blancs = set(debit[debit < D_COV].index)
 sites0 = set(env.sites_deja_presents)
 log(f"{len(blancs)} white points, {len(sites0)} existing sites")
 
-# Superset coverage
-M = sparse.load_npz(a.couv).tocsr()
-lig = pd.read_csv(a.lignes)
-col = pd.read_csv(a.colonnes)
-pid = col["point_id"].tolist()
-deps = [(int(r.ix), int(r.iy), str(r.gen), int(r.band)) for r in lig.itertuples()]
+# Superset coverage (couverture_potentielle.py): range + LOS for every corridor cell and initial white point
+Z = np.load(a.couv)
+from prepare_data import TECH_PROFILES
+from environment_rl import BANDES_PAR_GENERATION
+ny = env.grille.ny
+pid = list(Z["points"])
 couv = {}
-for i, d in enumerate(deps):
-    pts = {pid[j] for j in M.indices[M.indptr[i]:M.indptr[i + 1]]} & blancs
-    if pts and d not in env.deploiements_reels:
-        couv[d] = pts
+for i, c in enumerate(Z["cellules"]):
+    ix, iy = int(c) // ny, int(c) % ny
+    for g in BANDES_PAR_GENERATION:
+        los = Z[f"los_{g}"][i]
+        for f in BANDES_PAR_GENERATION[g]:
+            d = (ix, iy, g, int(f))
+            if d in env.deploiements_reels:
+                continue
+            m = los & (Z["dist_km"][i] <= TECH_PROFILES[(g, int(f))][0])
+            pts = {pid[j] for j in np.flatnonzero(m)} & blancs
+            if pts:
+                couv[d] = pts
 manquants = blancs - set().union(*couv.values())
-log(f"{len(deps)} deployments in the file, {len(couv)} cover at least one white point; "
-    f"{len(manquants)} white points covered by none (superset)")
+log(f"{len(Z['cellules'])} cells, {len(couv)} deployments cover at least one white point; "
+    f"{len(manquants)} white points covered by none (superset); file has {len(pid)} white points")
 
 exact = {}
 
