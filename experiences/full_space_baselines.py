@@ -24,6 +24,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("racine")
 ap.add_argument("--couv", required=True)        # couverture_potentielle_S1.npz
 ap.add_argument("--temps_max_s", type=int, default=5400)
+ap.add_argument("--out", default=None)              # output folder (default <repo_root>/resultats)
 a = ap.parse_args()
 
 sys.path.insert(0, os.path.join(a.racine, "placement"))
@@ -33,7 +34,7 @@ from environment_rl import FerroMobileEnv
 from baseline_aleatoire import resume_episode
 
 D_COV = 1.0
-OUT = os.path.join(a.racine, "resultats"); os.makedirs(OUT, exist_ok=True)
+OUT = a.out or os.path.join(a.racine, "resultats"); os.makedirs(OUT, exist_ok=True)
 T0 = time.time()
 
 
@@ -49,11 +50,12 @@ sites0 = set(env.sites_deja_presents)
 log(f"{len(blancs)} white points, {len(sites0)} existing sites")
 
 # Superset coverage (couverture_potentielle.py): range + LOS for every corridor cell and initial white point
-Z = np.load(a.couv)
+Z = dict(np.load(a.couv))    # load once (NpzFile re-reads the array at every access)
 from prepare_data import TECH_PROFILES
 from environment_rl import BANDES_PAR_GENERATION
 ny = env.grille.ny
 pid = list(Z["points"])
+blanc_col = np.array([p in blancs for p in pid])
 couv = {}
 for i, c in enumerate(Z["cellules"]):
     ix, iy = int(c) // ny, int(c) % ny
@@ -64,9 +66,9 @@ for i, c in enumerate(Z["cellules"]):
             if d in env.deploiements_reels:
                 continue
             m = los & (Z["dist_km"][i] <= TECH_PROFILES[(g, int(f))][0])
-            pts = {pid[j] for j in np.flatnonzero(m)} & blancs
-            if pts:
-                couv[d] = pts
+            idx = np.flatnonzero(m & blanc_col)
+            if len(idx):
+                couv[d] = {pid[j] for j in idx}
 manquants = blancs - set().union(*couv.values())
 log(f"{len(Z['cellules'])} cells, {len(couv)} deployments cover at least one white point; "
     f"{len(manquants)} white points covered by none (superset); file has {len(pid)} white points")
@@ -120,6 +122,7 @@ def resoudre_ilp():
     if res.x is None:
         raise RuntimeError(res.message)
     choisies = [d for j, d in enumerate(acts) if res.x[j] > 0.5]
+    log(f"  milp status {res.status}, dual bound {getattr(res, 'mip_dual_bound', None)}, gap {getattr(res, 'mip_gap', None)}")
     return choisies, float(cout @ np.round(res.x)), res.status == 0, len(pts), nA
 
 
@@ -176,6 +179,8 @@ def coverage_greedy():
             for g in couv:
                 if (g[0], g[1]) == (d[0], d[1]) and g not in deja:
                     heapq.heappush(tas, (-cle(g), g))
+        pd.DataFrame(plan, columns=["ix", "iy", "generation", "bande_mhz"]).to_csv(
+            os.path.join(OUT, "full_space_coverage_greedy.csv"), index=False)
         log(f"  CG site {len(plan)}: {d}, white left {len(reste)}, cost {10_000_000.0 - budget:,.0f} EUR")
     return plan
 
