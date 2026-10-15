@@ -287,8 +287,14 @@ def initialiser_depuis(chemin, modele, modele_cible, device):
     etat = torch.load(chemin, map_location=device, weights_only=False)
     if etat.get("architecture") != type(modele).__name__:
         raise RuntimeError(f"FM_INIT_FROM : architecture {etat.get('architecture')}, attendu {type(modele).__name__}")
-    modele.load_state_dict(etat["modele"])
-    modele_cible.load_state_dict(etat["modele"])
+    poids = dict(etat["modele"])
+    # Canaux ajoutés (ex. couverture potentielle) : poids d'entrée à zéro, le réseau part du run d'origine
+    w, w_neuf = poids["tronc.0.weight"], modele.state_dict()["tronc.0.weight"]
+    if w.shape[1] < w_neuf.shape[1]:
+        poids["tronc.0.weight"] = torch.cat([w, w.new_zeros(w.shape[0], w_neuf.shape[1] - w.shape[1], *w.shape[2:])], 1)
+        print(f"Affinage : {w_neuf.shape[1] - w.shape[1]} canaux ajoutés, poids d'entrée à zéro")
+    modele.load_state_dict(poids)
+    modele_cible.load_state_dict(poids)
     print(f"Affinage : poids de {chemin} (épisode {etat['episode']}), epsilon = {EPSILON_FIN}")
     return 0, EPSILON_FIN, N_STEPS_EXPLORATION
 
