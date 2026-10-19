@@ -96,12 +96,21 @@ def main():
             refuses.append((trou[0], len(trou), "antenne hors portee"))
 
     pts_combles = {l["point_id"] for l in nouvelles}
-    # the gap points lose their "no candidate" placeholder; their other links (2G) are kept
-    base = base[~(base.point_id.isin(pts_combles) & (base.path_loss_model == "AUCUN_CANDIDAT"))]
     ajout = pd.DataFrame(nouvelles)
     ajout["gen_num"] = ajout.generation.map({"2G": 1, "3G": 2, "4G": 3, "5G": 4}).fillna(0).astype(int)
     ajout["veg_num"] = ajout.vegetation.map({"plaine": 0, "urbain": 1, "foret_legere": 2, "foret_dense": 3}).fillna(0).astype(int)
-    base = pd.concat([base, ajout], ignore_index=True).sort_values(["point_id"], kind="stable")
+    # each gap point loses its "no candidate" placeholder (other links, e.g. 2G, are kept) and its
+    # new rows go right after its last row: enrich_data.py interpolates the weather along the row
+    # order, so every other row keeps its position
+    vide = base.point_id.isin(pts_combles) & (base.path_loss_model == "AUCUN_CANDIDAT")
+    derniere = base[base.point_id.isin(pts_combles)].groupby("point_id").tail(1).index
+    morceaux = []
+    for i, ligne in base.iterrows():
+        if not vide[i]:
+            morceaux.append(ligne.to_frame().T)
+        if i in derniere:
+            morceaux.append(ajout[ajout.point_id == ligne.point_id])
+    base = pd.concat(morceaux, ignore_index=True).astype(base.dtypes.to_dict(), errors="ignore")
 
     # zone_blanche recomputed as in prepare_data.py
     hors = ~base.in_tunnel.astype(bool)
