@@ -27,7 +27,7 @@ from simulateur_deploiement import simuler_deploiement
 import cost_model
 from cost_model import get_total_cost, get_radio_cost
 from utility import normaliser_metriques, compute_U, compute_r_t, compute_r_fin
-from prepare_data import TECH_PROFILES
+from prepare_data import TECH_PROFILES, get_portee_km, haversine_km_vec
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
@@ -97,7 +97,8 @@ class FerroMobileEnv:
                  sauvegarder_deploiements_rl=True, dataset_enrichi_rl_path=None,
                  run_id=None, episode_id=None, budget_reference=None,
                  points_evalues=None, points_stats=None, operateurs_exclus=(),
-                 actions_autorisees=None):
+                 actions_autorisees=None, stop_si_couvert=False, masque_utile=False,
+                 r_fin_blancs_initiaux=False, canal_couverture=False, chemin_couverture=None):
         self.scenario = scenario
         # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
@@ -110,6 +111,12 @@ class FerroMobileEnv:
         self.R_succes = R_succes
         self.R_eff = R_eff
         self.t_max = t_max
+        self.stop_si_couvert = stop_si_couvert   # True : STOP permis seulement à 0 zone blanche
+        self.masque_utile = masque_utile         # True : seules les cellules à portée d'un point blanc
+        self.r_fin_blancs_initiaux = r_fin_blancs_initiaux   # True : r_fin normalisé par les blancs initiaux
+        self.canal_couverture = canal_couverture  # True : 3 canaux de couverture potentielle (un par génération)
+        self.chemin_couverture = chemin_couverture
+        self._couverture = None
         self.sauvegarder_deploiements_rl = sauvegarder_deploiements_rl
 
         # Identifiant unique du run
@@ -160,6 +167,17 @@ class FerroMobileEnv:
                     for la, lo in zip(self.df_points_perf["lat"].values, self.df_points_perf["lon"].values)]
         self._cellule_perf = np.array([-1 if c is None else c[0] * self.grille.ny + c[1] for c in cellules],
                                       dtype=np.int64)
+
+        # Masque utile : centre de chaque cellule, portée de chaque action, position des points
+        if masque_utile:
+            self._cellules_uniques, self._cellule_vers_unique = np.unique(self._cellule_action, return_inverse=True)
+            centres = [self.grille.cellule_vers_gps(c // self.grille.ny, c % self.grille.ny)
+                       for c in self._cellules_uniques]
+            self._lat_cellules = np.array([c[0] for c in centres])
+            self._lon_cellules = np.array([c[1] for c in centres])
+            self._portee_action = np.array([get_portee_km(a[2], a[3]) for a in self.actions[1:]])
+            pts = self.df_points.set_index("point_id")
+            self._lat_point, self._lon_point = pts["lat"].to_dict(), pts["lon"].to_dict()
 
         self._reset_appele = False
 
@@ -237,6 +255,10 @@ class FerroMobileEnv:
         self._dernier_resultat_dp = resultat_dp
         self._dernier_n_white = n_white
         self._dernier_n_eval = n_eval
+        self.n_white_initial = n_white
+        self._maj_actions_utiles()
+        if self.canal_couverture and self._couverture is None:
+            self._preparer_couverture()
         self.U_courant = self._calculer_U(resultat_dp, n_eval, n_white)
         self.U0_reference = self.U_reference()
 
@@ -285,7 +307,9 @@ class FerroMobileEnv:
 
         # Zone blanche : meilleur débit < D_cov, sur tout le corridor hors tunnel
         debit_sur_corridor = debit_combine.reindex(list(self.points_hors_tunnel))
-        n_white = int((debit_sur_corridor.fillna(0) < D_COV).sum())
+        blancs = debit_sur_corridor.fillna(0) < D_COV
+        self._points_blancs = list(blancs.index[blancs.values])
+        n_white = int(blancs.sum())
         n_eval = len(points)
         return resultat_dp, n_white, n_eval
 
@@ -306,8 +330,10 @@ class FerroMobileEnv:
     def _est_faisable(self, action):
         """Infaisable si (ix, iy, g, f) existe déjà ou si le budget ne suffit pas."""
         if action == STOP:
-            return True
+            return self._stop_permis(self._actions_faisables()[1:].any())
         if self.actions_autorisees is not None and not self.actions_autorisees[self.action_index[action]]:
+            return False
+        if self.masque_utile and not self._utile[self.action_index[action] - 1]:
             return False
         ix, iy, g, f = action
         if (ix, iy, g, f) in self.deploiements_reels or (ix, iy, g, f) in self.infrastructure_deployee:
@@ -323,7 +349,62 @@ class FerroMobileEnv:
         masque[1:] = (~self._deploye[1:]) & (cout <= self.budget_restant)
         if self.actions_autorisees is not None:
             masque &= self.actions_autorisees
+        if self.masque_utile:
+            masque[1:] &= self._utile
+        masque[0] = self._stop_permis(masque[1:].any())
         return masque
+
+    def _maj_actions_utiles(self):
+        """Masque utile : action à portée nominale d'au moins un point blanc restant.
+        La LOS n'est pas testée, donc le masque ne retire jamais une action qui pourrait couvrir."""
+        if not self.masque_utile:
+            return
+        if not self._points_blancs:
+            self._utile = np.zeros(len(self.actions) - 1, dtype=bool)
+            return
+        lat = np.array([self._lat_point[p] for p in self._points_blancs])
+        lon = np.array([self._lon_point[p] for p in self._points_blancs])
+        # Distance de chaque cellule au point blanc le plus proche (km)
+        d_min = np.full(len(self._cellules_uniques), np.inf)
+        for la, lo in zip(lat, lon):
+            np.minimum(d_min, haversine_km_vec(la, lo, self._lat_cellules, self._lon_cellules), out=d_min)
+        self._utile = d_min[self._cellule_vers_unique] <= self._portee_action
+
+    def _preparer_couverture(self):
+        """Lit (ou calcule une fois) portée + LOS cellule -> point blanc, par génération."""
+        import couverture_potentielle as cp
+        d = cp.charger_ou_calculer(self, self.chemin_couverture or cp.CHEMIN_DEFAUT)
+        manquants = set(self._points_blancs) - set(d["points"].tolist())
+        if manquants:
+            raise RuntimeError(f"Fichier de couverture potentielle calculé pour d'autres points ({len(manquants)} "
+                               "points blancs absents) : le supprimer ou donner chemin_couverture.")
+        self._couverture = {
+            "cellules": d["cellules"],
+            "index_point": {p: j for j, p in enumerate(d["points"].tolist())},
+            # A_g[c, p] = 1 si une antenne de génération g en c couvrirait p (portée max de g + LOS)
+            "A": [((d[f"los_{g}"]) & (d["dist_km"] <= max(get_portee_km(g, f) for f in BANDES_PAR_GENERATION[g])))
+                  .astype(np.float32) for g in sorted(BANDES_PAR_GENERATION)],
+        }
+
+    def _canaux_couverture(self):
+        """Par génération : nombre de points encore blancs que chaque cellule couvrirait (/ 50)."""
+        c = self._couverture
+        blancs = np.zeros(len(c["index_point"]), dtype=np.float32)
+        for p in self._points_blancs:
+            j = c["index_point"].get(p)
+            if j is not None:
+                blancs[j] = 1.0
+        canaux = np.zeros((len(c["A"]), self.grille.nx * self.grille.ny))
+        for k, A in enumerate(c["A"]):
+            canaux[k, c["cellules"]] = A @ blancs / 50.0
+        return canaux.reshape(len(c["A"]), self.grille.nx, self.grille.ny)
+
+    def _stop_permis(self, deploiement_possible):
+        """STOP toujours permis, sauf avec stop_si_couvert : seulement à 0 zone blanche
+        (ou si plus aucun déploiement n'est faisable)."""
+        if not self.stop_si_couvert:
+            return True
+        return self._dernier_n_white == 0 or not deploiement_possible
 
     def _actions_faisables_reference(self):
         """Version d'origine (boucle Python), gardée pour les tests d'équivalence."""
@@ -352,7 +433,8 @@ class FerroMobileEnv:
         canaux_perf = self._canaux_performance(debit_combine, meilleure_qos)
 
         canal_mats = construire_canal_mats_rl(self.grille, self.infrastructure_deployee)
-        etat_spatial = np.concatenate([self.canaux_statiques, canaux_infra, canaux_perf, canal_mats], axis=0)
+        etat_spatial = np.concatenate([self.canaux_statiques, canaux_infra, canaux_perf, canal_mats]
+                                      + ([self._canaux_couverture()] if self.canal_couverture else []), axis=0)
         b_t = self.budget_restant / self.budget_reference
         progression = self.t / self.t_max
         return {"grille": etat_spatial, "b_t": b_t, "progression": progression}
@@ -484,6 +566,7 @@ class FerroMobileEnv:
         self._dernier_resultat_dp = resultat_dp
         self._dernier_n_white = n_white
         self._dernier_n_eval = n_eval
+        self._maj_actions_utiles()
         self.t += 1
 
         # Fin forcée : plus d'action possible, couverture complète, ou t_max
@@ -503,7 +586,7 @@ class FerroMobileEnv:
         # Arguments nommés pour éviter une erreur d'ordre
         r_fin = compute_r_fin(
             n_white=self._dernier_n_white,
-            n_total=self.n_total,
+            n_total=self.n_white_initial if self.r_fin_blancs_initiaux and self.n_white_initial else self.n_total,
             qos_min=self._dernier_resultat_dp["qos_min"],
             cost_total=cout_total,
             budget=self.budget_total,

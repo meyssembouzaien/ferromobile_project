@@ -22,13 +22,13 @@ DILATATIONS = (1, 2, 4, 8, 16)
 
 class FerroMobileDuelingDQN(nn.Module):
 
-    def __init__(self, n_configs_radio, corridor_mask, n_canaux=N_CANAUX_ETAT, largeur=64):
+    def __init__(self, n_configs_radio, corridor_mask, n_canaux=N_CANAUX_ETAT, largeur=64, dilatations=DILATATIONS):
         super().__init__()
         self.n_configs_radio = n_configs_radio
 
         # Tronc convolutif dilaté : même taille de grille en sortie (padding = dilatation)
         couches, entree = [], n_canaux
-        for d in DILATATIONS:
+        for d in dilatations:
             couches += [nn.Conv2d(entree, largeur, kernel_size=3, padding=d, dilation=d), nn.ReLU()]
             entree = largeur
         self.tronc = nn.Sequential(*couches)
@@ -68,6 +68,29 @@ class FerroMobileDuelingDQN(nn.Module):
         return v + avantages - avantages.mean(dim=1, keepdim=True)
 
 
+class FerroMobileVanillaDQN(FerroMobileDuelingDQN):
+    """Vanilla DQN (ablation, Expérience E) : même réseau, Q(s, a) lu directement, sans V(s)."""
+
+    def forward(self, grille, b_t, progression):
+        x = self.tronc(grille)
+        B, _, H, W = x.shape
+        scalaires = torch.stack([b_t, progression], dim=1)
+        q_stop = self.tete_stop(torch.cat([x.mean(dim=[2, 3]), scalaires], dim=1))
+        cartes = scalaires.view(B, 2, 1, 1).expand(B, 2, H, W)
+        q = self.tete_avantage(torch.cat([x, cartes], dim=1))
+        q = q.permute(0, 2, 3, 1).reshape(B, H * W, self.n_configs_radio)
+        q = q.index_select(1, self.indices_actions).reshape(B, -1)
+        return torch.cat([q_stop, q], dim=1)
+
+
+def _test_vanilla():
+    masque = np.random.default_rng(1).random((12, 9)) < 0.5
+    modele = FerroMobileVanillaDQN(n_configs_radio=10, corridor_mask=masque)
+    q = modele(torch.randn(3, N_CANAUX_ETAT, 12, 9), torch.rand(3), torch.rand(3))
+    assert q.shape == (3, modele.taille_sortie()) and torch.isfinite(q).all()
+    print(f"_test_vanilla : OK {tuple(q.shape)}")
+
+
 def _test_ordre():
     """L'ordre des cellules doit être celui de la boucle for ix: for iy:."""
     masque = np.zeros((5, 4), dtype=bool)
@@ -99,8 +122,7 @@ def _test_dueling():
 
 
 def _test_champ_recepteur():
-    """Architecture seule (modèle non entraîné) : une perturbation à 30 cellules (7,5 km) peut influencer
-    l'avantage de la cellule centrale, une perturbation à 40 cellules (10 km) ne le peut pas."""
+    """Une cellule voit à 30 cellules (7,5 km), pas à 40 (10 km)."""
     torch.manual_seed(0)
     masque = np.ones((101, 101), dtype=bool)
     modele = FerroMobileDuelingDQN(n_configs_radio=1, corridor_mask=masque)
@@ -127,4 +149,5 @@ if __name__ == "__main__":
     _test_forme()
     _test_dueling()
     _test_champ_recepteur()
+    _test_vanilla()
     print("Tous les tests passent.")

@@ -42,7 +42,10 @@ def charger_politique(chemin, device):
 def evaluer(env, etat_ckpt, classe, device, experience, configuration, extra=None):
     from environment_rl import BANDES_PAR_GENERATION
     n_configs = sum(len(v) for v in BANDES_PAR_GENERATION.values())
-    modele = classe(n_configs, env.grille.corridor_mask).to(device)
+    config = etat_ckpt.get("config") or {}
+    modele = classe(n_configs, env.grille.corridor_mask,
+                    n_canaux=T.N_CANAUX_ETAT + (3 if config.get("canal_couverture") else 0),
+                    dilatations=T.DILATATIONS + ((32,) if config.get("vue_large") else ())).to(device)
     modele.load_state_dict(etat_ckpt["modele"])
     modele.eval()
     env.reset()
@@ -87,7 +90,12 @@ def main():
     print(f"Politique : {args.checkpoint} ({etat_ckpt['architecture']}, épisode {etat_ckpt['episode']}, "
           f"poids d'entraînement {etat_ckpt.get('poids')})")
 
+    # Options d'environnement du run (masque, STOP, r_fin), lues dans le checkpoint
+    options = {k: True for k in ("stop_si_couvert", "masque_utile", "r_fin_blancs_initiaux", "canal_couverture")
+               if (etat_ckpt.get("config") or {}).get(k)}
+
     def env_(**k):
+        k = {**options, **k}
         k.setdefault("scenario", "S1")
         k.setdefault("budget", B_TRAIN)
         k.setdefault("budget_reference", B_TRAIN)
@@ -115,9 +123,9 @@ def main():
             base.reset()
             config = cv_blocks.preparer_pli(base, args.pli, B_TRAIN)
             del base
-            lignes.append(evaluer(cv_blocks.env_test(config), etat_ckpt, classe, device, "pli",
+            lignes.append(evaluer(cv_blocks.env_test(config, **options), etat_ckpt, classe, device, "pli",
                                   f"pli {args.pli}, bloc de test", {"budget_eur": config["budget_test"]}))
-            env_cg = cv_blocks.env_test(config)
+            env_cg = cv_blocks.env_test(config, **options)
             env_cg.reset()
             n_avant = env_cg._dernier_n_white
             resume, _ = couverture_gloutonne(env_cg, verbeux=False)

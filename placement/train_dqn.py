@@ -10,6 +10,12 @@ Hyperparamètres : tableau 4.1. Réglages par variables d'environnement :
     FM_FOLD       pli de validation croisée 1..4 (0 = ligne entière)
     FM_MAX_HOURS  arrêt propre avant cette durée (11 h sur Kaggle)
     FM_SYNC       sauvegarde dans un dataset Kaggle privé (1 sur Kaggle)
+    FM_STOP_COVERED  1 : STOP permis seulement à 0 zone blanche (0 par défaut)
+    FM_USEFUL_MASK   1 : seules les cellules à portée d'un point blanc restant (0 par défaut)
+    FM_RFIN_WHITE0   1 : r_fin normalisé par les zones blanches initiales (0 par défaut)
+    FM_COVER_CHANNEL 1 : 3 canaux de couverture potentielle (portée + LOS), un par génération (0 par défaut)
+    FM_WIDE          1 : tronc avec une dilatation 32 en plus (vue d'environ 32 km) (0 par défaut)
+    FM_INIT_FROM  checkpoint .pt dont on reprend les poids pour un nouveau run (affinage)
 
 Sorties dans checkpoints/<run>/ : train_log.csv, eval_log.csv, console.log,
 dernier.pt, buffer.npz. Le run reprend seul au dernier checkpoint.
@@ -26,7 +32,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dqn_model import FerroMobileDuelingDQN, FerroMobileVanillaDQN, N_CANAUX_ETAT
+from dqn_model import FerroMobileDuelingDQN, FerroMobileVanillaDQN, N_CANAUX_ETAT, DILATATIONS
 from replay_buffer import ReplayBuffer
 
 CE_FICHIER = os.path.dirname(os.path.abspath(__file__))
@@ -63,11 +69,29 @@ SYNCHRONISER = os.environ.get("FM_SYNC", "1" if SUR_KAGGLE else "0") == "1"
 POIDS_W = float(os.environ.get("FM_W_W", 1.0))
 POIDS_TRANS = float(os.environ.get("FM_W_TRANS", 1.0))
 PENALITE_COUT = float(os.environ.get("FM_COST_STEP", 0.0))
+STOP_SI_COUVERT = os.environ.get("FM_STOP_COVERED", "0") == "1"
+MASQUE_UTILE = os.environ.get("FM_USEFUL_MASK", "0") == "1"
+R_FIN_BLANCS_INITIAUX = os.environ.get("FM_RFIN_WHITE0", "0") == "1"
+CANAL_COUVERTURE = os.environ.get("FM_COVER_CHANNEL", "0") == "1"
+VUE_LARGE = os.environ.get("FM_WIDE", "0") == "1"
+N_CANAUX = N_CANAUX_ETAT + (3 if CANAL_COUVERTURE else 0)
+OPTIONS_MODELE = {"n_canaux": N_CANAUX, "dilatations": DILATATIONS + ((32,) if VUE_LARGE else ())}
+# Options de l'environnement (seulement celles activées)
+OPTIONS_ENV = {k: True for k, v in [("stop_si_couvert", STOP_SI_COUVERT), ("masque_utile", MASQUE_UTILE),
+                                    ("r_fin_blancs_initiaux", R_FIN_BLANCS_INITIAUX),
+                                    ("canal_couverture", CANAL_COUVERTURE)] if v}
+INIT_DEPUIS = os.environ.get("FM_INIT_FROM", "")
 POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_TRANS, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
 
 _SUFFIXE = ((f"_wT{POIDS_TRANS:g}" if POIDS_TRANS != 1.0 else "")
             + (f"_cost{PENALITE_COUT:g}" if PENALITE_COUT else "")
-            + (f"_fold{PLI}" if PLI else ""))
+            + (f"_fold{PLI}" if PLI else "")
+            + ("_stopcov" if STOP_SI_COUVERT else "")
+            + ("_mask" if MASQUE_UTILE else "")
+            + ("_rfw0" if R_FIN_BLANCS_INITIAUX else "")
+            + ("_cov" if CANAL_COUVERTURE else "")
+            + ("_wide" if VUE_LARGE else "")
+            + ("_ft" if INIT_DEPUIS else ""))
 NOM_RUN = os.environ.get("FM_RUN", f"{ARCHITECTURE}_{MODE_EXPLORATION}_wW{POIDS_W:g}{_SUFFIXE}_seed{SEED}")
 DOSSIER_CHECKPOINTS = os.path.join(os.environ.get("FM_CHECKPOINTS", os.path.join(RACINE_PROJET, "checkpoints")),
                                    NOM_RUN)
@@ -87,6 +111,12 @@ CONFIG_RUN = {"architecture": CLASSE_MODELE.__name__, "poids": POIDS, "explorati
               "seed": SEED, "penalite_cout": PENALITE_COUT, "pli": PLI, "budget": BUDGET, "scenario": SCENARIO,
               "t_max": T_MAX, "batch": BATCH_SIZE, "lr": LR, "buffer": CAPACITE_BUFFER,
               "n_steps_exploration": N_STEPS_EXPLORATION, "maj_cible": MAJ_CIBLE_TOUS_LES_N_STEPS}
+# Clés ajoutées seulement si activées : les anciens checkpoints restent compatibles
+CONFIG_RUN.update(OPTIONS_ENV)
+if VUE_LARGE:
+    CONFIG_RUN["vue_large"] = True
+if INIT_DEPUIS:
+    CONFIG_RUN["init_depuis"] = os.path.basename(os.path.dirname(INIT_DEPUIS))
 
 
 class Console:
@@ -184,7 +214,7 @@ def verifier_integration(env, modele, device):
         q = modele(*etat_vers_tenseurs(etat, device))
     assert q.shape == (1, len(env.actions)) and torch.isfinite(q).all()
     masque = env._actions_faisables()
-    assert masque.shape == (len(env.actions),) and masque[0]
+    assert masque.shape == (len(env.actions),) and (masque[0] or env.stop_si_couvert)
     assert np.array_equal(masque, env._actions_faisables_reference()), "masque vectorisé différent"
     print(f"verifier_integration : OK (état {etat['grille'].shape}, |A| = {len(env.actions)}, "
           f"{int(masque.sum())} actions faisables)")
@@ -250,6 +280,23 @@ def charger_checkpoint(modele, modele_cible, optimiseur, device, n_actions, buff
         print("  ATTENTION : pas de replay buffer sauvegardé, la reprise n'est pas exacte")
     print(f"Reprise à l'épisode {etat['episode']}, epsilon = {etat['epsilon']:.3f}")
     return etat["episode"], etat["epsilon"], etat["total_steps"]
+
+
+def initialiser_depuis(chemin, modele, modele_cible, device):
+    """Affinage : poids d'un autre run, optimiseur et buffer neufs, epsilon au plancher."""
+    etat = torch.load(chemin, map_location=device, weights_only=False)
+    if etat.get("architecture") != type(modele).__name__:
+        raise RuntimeError(f"FM_INIT_FROM : architecture {etat.get('architecture')}, attendu {type(modele).__name__}")
+    poids = dict(etat["modele"])
+    # Canaux ajoutés (ex. couverture potentielle) : poids d'entrée à zéro, le réseau part du run d'origine
+    w, w_neuf = poids["tronc.0.weight"], modele.state_dict()["tronc.0.weight"]
+    if w.shape[1] < w_neuf.shape[1]:
+        poids["tronc.0.weight"] = torch.cat([w, w.new_zeros(w.shape[0], w_neuf.shape[1] - w.shape[1], *w.shape[2:])], 1)
+        print(f"Affinage : {w_neuf.shape[1] - w.shape[1]} canaux ajoutés, poids d'entrée à zéro")
+    modele.load_state_dict(poids)
+    modele_cible.load_state_dict(poids)
+    print(f"Affinage : poids de {chemin} (épisode {etat['episode']}), epsilon = {EPSILON_FIN}")
+    return 0, EPSILON_FIN, N_STEPS_EXPLORATION
 
 
 def preparer_log(chemin, colonnes, dernier_episode):
@@ -420,7 +467,7 @@ def creer_environnement():
     from environment_rl import FerroMobileEnv
     if not PLI:
         return FerroMobileEnv(scenario=SCENARIO, budget=BUDGET, t_max=T_MAX, poids=POIDS,
-                              sauvegarder_deploiements_rl=False)
+                              sauvegarder_deploiements_rl=False, **OPTIONS_ENV)
     import cv_blocks
     base = FerroMobileEnv(scenario=SCENARIO, budget=BUDGET, t_max=T_MAX, sauvegarder_deploiements_rl=False)
     base.reset()
@@ -429,7 +476,7 @@ def creer_environnement():
           f"({config['n_blancs_train']} blancs), budget {config['budget_train'] / 1e6:.2f} M€, "
           f"{100 * config['part_masquee']:.0f} % des actions masquées (portée vers le bloc de test)")
     del base
-    return cv_blocks.env_entrainement(config, scenario=SCENARIO, t_max=T_MAX, poids=POIDS)
+    return cv_blocks.env_entrainement(config, scenario=SCENARIO, t_max=T_MAX, poids=POIDS, **OPTIONS_ENV)
 
 
 def main():
@@ -455,7 +502,8 @@ def main():
     print(f"Device : {device} | architecture : {ARCHITECTURE} | exploration : {MODE_EXPLORATION} | "
           f"seed : {SEED} | poids : {POIDS} | coût dans r_t : {PENALITE_COUT} | pli : {PLI or 'aucun'} | "
           f"épisodes : {N_EPISODES_TRAIN} | run : {DOSSIER_CHECKPOINTS} | "
-          f"limite de session : {DUREE_MAX_S / 3600:.1f} h | sauvegarde Kaggle : "
+          f"limite de session : {DUREE_MAX_S / 3600:.1f} h | STOP seulement à 0 zone blanche : "
+          f"{'oui' if STOP_SI_COUVERT else 'non'} | options env : {OPTIONS_ENV or 'aucune'} | sauvegarde Kaggle : "
           f"{'oui' if sauvegarde and sauvegarde.actif else 'non'}")
     with open(os.path.join(DOSSIER_CHECKPOINTS, "config_run.json"), "w") as f:
         json.dump({**CONFIG_RUN, "episodes": N_EPISODES_TRAIN, "run": NOM_RUN}, f, indent=1)
@@ -463,19 +511,21 @@ def main():
     env = creer_environnement()
     n_configs = sum(len(v) for v in BANDES_PAR_GENERATION.values())
 
-    modele = CLASSE_MODELE(n_configs, env.grille.corridor_mask).to(device)
-    modele_cible = CLASSE_MODELE(n_configs, env.grille.corridor_mask).to(device)
+    modele = CLASSE_MODELE(n_configs, env.grille.corridor_mask, **OPTIONS_MODELE).to(device)
+    modele_cible = CLASSE_MODELE(n_configs, env.grille.corridor_mask, **OPTIONS_MODELE).to(device)
     optimiseur = torch.optim.Adam(modele.parameters(), lr=LR)
 
     verifier_integration(env, modele, device)
     verifier_ordre_actions(env, n_configs)
 
     buffer = ReplayBuffer(capacity=CAPACITE_BUFFER, nx=env.grille.nx, ny=env.grille.ny,
-                          n_canaux_etat=N_CANAUX_ETAT, n_actions=len(env.actions), n_canaux_fixes=N_CANAUX_FIXES)
+                          n_canaux_etat=N_CANAUX, n_actions=len(env.actions), n_canaux_fixes=N_CANAUX_FIXES)
     modele_cible.load_state_dict(modele.state_dict())
     # Reprise depuis le dernier checkpoint s'il existe
     episode_depart, epsilon, total_steps = charger_checkpoint(modele, modele_cible, optimiseur, device,
                                                               len(env.actions), buffer)
+    if episode_depart == 0 and INIT_DEPUIS:
+        episode_depart, epsilon, total_steps = initialiser_depuis(INIT_DEPUIS, modele, modele_cible, device)
     if episode_depart >= N_EPISODES_TRAIN:
         print(f"Run déjà terminé ({episode_depart} épisodes). Augmenter FM_EPISODES pour continuer.")
         return
