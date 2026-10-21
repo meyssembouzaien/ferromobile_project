@@ -22,7 +22,7 @@ e = pd.read_csv(os.path.join(RACINE, "data", "processed", "dataset_enrichi.csv")
 s1 = e[e.scenario_id == "S1"]
 pts = s1.drop_duplicates("point_id").set_index("point_id")[["distance_km", "in_tunnel"]]
 pts["in_tunnel"] = pts.in_tunnel.astype(str).str.lower().isin(["true", "1"])
-reels = s1[["point_id", "generation", "debit_adj_mbps"]].dropna()
+reels = s1[["point_id", "generation", "debit_adj_mbps"]].dropna().reset_index(drop=True)
 
 
 def meilleur(liens):
@@ -64,7 +64,7 @@ def tracer(ax, d, titre):
 liens_plan = pd.read_csv(sys.argv[1])
 out_dir = sys.argv[2]
 avant = meilleur(reels)
-apres = meilleur(pd.concat([reels, liens_plan[["point_id", "generation", "debit_adj_mbps"]]]))
+apres = meilleur(pd.concat([reels, liens_plan[["point_id", "generation", "debit_adj_mbps"]]], ignore_index=True))
 nom = os.path.basename(sys.argv[1]).replace("liens_", "").replace(".csv", "")
 titre = {"dueling_ep725": "Dueling DQN (episode 725, 8 sites, 1.295 M€)",
          "ilp": "ILP (6 sites, 0.87 M€)"}.get(nom, nom)
