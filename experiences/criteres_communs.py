@@ -40,11 +40,10 @@ def mesurer(nom, total, n_steps):
     q = np.array([0.0 if (p in blancs or p not in qos_dp) else qos_dp[p] for p in hors])
     est_blanc = [p in blancs for p in hors]
     n_cut = sum(1 for i, b in enumerate(est_blanc) if b and (i == 0 or not est_blanc[i - 1]))
-    cout = env.budget - env.budget_restant if hasattr(env, "budget_restant") else np.nan
     return {"methode": nom, "n_white": len(blancs), "q_mean": q.mean(), "q_min": q.min(),
             "N_H": dp["N_H"], "N_O": dp["N_O"], "N_T": dp["N_T"], "N_cut": n_cut,
-            "N_H_cut": dp["N_H"] + n_cut, "cout": cout, "reward_total": total,
-            "return_ref": env.U_reference() - env.U0_reference + getattr(env, "_dernier_r_fin", 0.0),
+            "N_H_cut": dp["N_H"] + n_cut, "cout": np.nan, "reward_total": total,
+            "return_ref": np.nan,
             "n_steps": n_steps}
 
 
@@ -60,7 +59,7 @@ def rejouer(nom, plan):
         _, r, done, info = env.step(STOP)
         total += r
     res = mesurer(nom, total, n)
-    res["cout"] = info.get("cout_total", res["cout"])
+    res["cout"] = info.get("cout_total", 0.0)
     res["return_ref"] = env.U_reference() - env.U0_reference + info.get("r_fin", 0.0)
     print(res, flush=True)
     return res
