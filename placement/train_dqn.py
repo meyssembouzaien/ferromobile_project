@@ -16,6 +16,8 @@ Hyperparamètres : tableau 4.1. Réglages par variables d'environnement :
     FM_COVER_CHANNEL 1 : 3 canaux de couverture potentielle (portée + LOS), un par génération (0 par défaut)
     FM_WIDE          1 : tronc avec une dilatation 32 en plus (vue d'environ 32 km) (0 par défaut)
     FM_INIT_FROM  checkpoint .pt dont on reprend les poids pour un nouveau run (affinage)
+    FM_LR         taux d'apprentissage (1e-4)
+    FM_MAJ_CIBLE  synchronisation du réseau cible tous les N steps (200)
 
 Sorties dans checkpoints/<run>/ : train_log.csv, eval_log.csv, console.log,
 dernier.pt, buffer.npz. Le run reprend seul au dernier checkpoint.
@@ -46,7 +48,7 @@ BUDGET = 10_000_000.0
 SCENARIO = "S1"
 BATCH_SIZE = 32
 GAMMA = 1.0                      # épisodique : le retour vaut U_T - U_0 + r_fin
-LR = 1e-4
+LR = float(os.environ.get("FM_LR", "1e-4"))
 EPSILON_DEBUT, EPSILON_FIN = 1.0, 0.05
 N_STEPS_EXPLORATION = 6000       # epsilon atteint EPSILON_FIN après ce nombre de steps (éq. 3.37)
 EPSILON_DECROISSANCE = EPSILON_FIN ** (1 / N_STEPS_EXPLORATION)
@@ -58,7 +60,7 @@ N_STEPS_UNIFORME = 1000          # softmax : exploration uniforme tant que le r�
 SEED = int(os.environ.get("FM_SEED", 0))
 ARCHITECTURE = os.environ.get("FM_ARCH", "dueling")   # "dueling" ou "vanilla"
 CLASSE_MODELE = {"dueling": FerroMobileDuelingDQN, "vanilla": FerroMobileVanillaDQN}[ARCHITECTURE]
-MAJ_CIBLE_TOUS_LES_N_STEPS = 200
+MAJ_CIBLE_TOUS_LES_N_STEPS = int(os.environ.get("FM_MAJ_CIBLE", "200"))   # target network sync
 SAUVER_TOUS_LES_N_EPISODES = int(os.environ.get("FM_SAVE_EVERY", 25))
 EVALUER_TOUS_LES_N_EPISODES = 25
 PLI = int(os.environ.get("FM_FOLD", 0))
