@@ -98,11 +98,15 @@ class FerroMobileEnv:
                  run_id=None, episode_id=None, budget_reference=None,
                  points_evalues=None, points_stats=None, operateurs_exclus=(),
                  actions_autorisees=None, stop_si_couvert=False, masque_utile=False,
-                 r_fin_blancs_initiaux=False, canal_couverture=False, chemin_couverture=None):
+                 r_fin_blancs_initiaux=False, canal_couverture=False, chemin_couverture=None,
+                 retrait_sites=0.0):
         self.scenario = scenario
         # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
         self.operateurs_exclus = set(operateurs_exclus)
+        # Réseaux variés : à chaque reset, une fois sur deux, on retire jusqu'à cette part des sites existants
+        self.retrait_sites = retrait_sites
+        self.retrait_actif = True   # False pendant l'évaluation gloutonne (réseau complet)
         self.budget_total = budget
         self.poids = poids or {"w_Q": 1.0, "w_W": 1.0, "w_H": 1.0, "w_O": 1.0, "w_T": 1.0}
         self.Q_critique = Q_critique
@@ -200,6 +204,14 @@ class FerroMobileEnv:
         if self.operateurs_exclus:
             # Expérience C niveau 2 : on retire les liens de ces opérateurs
             df_scenario = df_scenario[~df_scenario["operateur"].isin(self.operateurs_exclus)]
+        self.n_sites_retires = 0
+        if self.retrait_sites and self.retrait_actif and np.random.rand() < 0.5:
+            sites = df_scenario[["ant_lat", "ant_lon"]].dropna().round(5).drop_duplicates()
+            n = int(np.random.randint(1, int(self.retrait_sites * len(sites)) + 1))
+            retires = sites.iloc[np.random.choice(len(sites), n, replace=False)]
+            cle = df_scenario["ant_lat"].round(5).astype(str) + "_" + df_scenario["ant_lon"].round(5).astype(str)
+            df_scenario = df_scenario[~cle.isin(set(retires.ant_lat.astype(str) + "_" + retires.ant_lon.astype(str)))]
+            self.n_sites_retires = n
         # Réseau réel complet (antennes, sites, canaux d'infrastructure) ...
         self.df_reel_complet = df_scenario[(~df_scenario["in_tunnel"]) & (df_scenario["ant_id"].notna())]
         # ... et ses liens vers les points évalués (DP, N_white)

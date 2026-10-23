@@ -76,12 +76,15 @@ MASQUE_UTILE = os.environ.get("FM_USEFUL_MASK", "0") == "1"
 R_FIN_BLANCS_INITIAUX = os.environ.get("FM_RFIN_WHITE0", "0") == "1"
 CANAL_COUVERTURE = os.environ.get("FM_COVER_CHANNEL", "0") == "1"
 VUE_LARGE = os.environ.get("FM_WIDE", "0") == "1"
+RETRAIT_SITES = float(os.environ.get("FM_SITE_DROP", "0"))   # ex. 0.3 : réseaux existants variés
 N_CANAUX = N_CANAUX_ETAT + (3 if CANAL_COUVERTURE else 0)
 OPTIONS_MODELE = {"n_canaux": N_CANAUX, "dilatations": DILATATIONS + ((32,) if VUE_LARGE else ())}
 # Options de l'environnement (seulement celles activées)
 OPTIONS_ENV = {k: True for k, v in [("stop_si_couvert", STOP_SI_COUVERT), ("masque_utile", MASQUE_UTILE),
                                     ("r_fin_blancs_initiaux", R_FIN_BLANCS_INITIAUX),
                                     ("canal_couverture", CANAL_COUVERTURE)] if v}
+if RETRAIT_SITES:
+    OPTIONS_ENV["retrait_sites"] = RETRAIT_SITES
 INIT_DEPUIS = os.environ.get("FM_INIT_FROM", "")
 POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_TRANS, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
 
@@ -93,6 +96,7 @@ _SUFFIXE = ((f"_wT{POIDS_TRANS:g}" if POIDS_TRANS != 1.0 else "")
             + ("_rfw0" if R_FIN_BLANCS_INITIAUX else "")
             + ("_cov" if CANAL_COUVERTURE else "")
             + ("_wide" if VUE_LARGE else "")
+            + (f"_drop{RETRAIT_SITES:g}" if RETRAIT_SITES else "")
             + ("_ft" if INIT_DEPUIS else ""))
 NOM_RUN = os.environ.get("FM_RUN", f"{ARCHITECTURE}_{MODE_EXPLORATION}_wW{POIDS_W:g}{_SUFFIXE}_seed{SEED}")
 DOSSIER_CHECKPOINTS = os.path.join(os.environ.get("FM_CHECKPOINTS", os.path.join(RACINE_PROJET, "checkpoints")),
@@ -360,7 +364,9 @@ def episode_glouton(env, modele, device):
 
 def evaluer_politique_greedy(env, modele, device, episode):
     """Évaluation gloutonne tous les 25 épisodes (section 4.3.2). N'alimente pas le buffer."""
+    env.retrait_actif = False      # toujours évaluée sur le réseau complet
     resume, trace = episode_glouton(env, modele, device)
+    env.retrait_actif = True
     ajouter_log(CHEMIN_LOG_EVAL, COLONNES_LOG_EVAL, {"episode": episode, **resume})
     with open(os.path.join(DOSSIER_CHECKPOINTS, f"eval_trace_ep{episode}.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(trace[0]))
