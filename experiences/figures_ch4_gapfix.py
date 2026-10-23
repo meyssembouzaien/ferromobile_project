@@ -27,6 +27,7 @@ full = cc[cc.methode.isin(["Coverage-Greedy", "Trajectory-Greedy", "ILP", "Dueli
 # 1) training of the Dueling DQN: greedy evaluations every 25 episodes
 ev = pd.read_csv(T + "kaggle_run_wW5_dueling_gapfix/session2/eval_log.csv")
 tr = pd.read_csv(T + "kaggle_run_wW5_dueling_gapfix/session2/train_log.csv")
+ev, tr = ev[ev.episode <= 725], tr[tr.episode <= 725]       # final agent = episode 725
 fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
 ax[0].plot(tr.episode, tr.n_white.rolling(25).mean(), color="#8A94A6", lw=1, label="training (moving avg. 25)")
 ax[0].plot(ev.episode, ev.n_white, "o-", ms=3, color="#F26B5B", label="greedy evaluation")
@@ -35,9 +36,9 @@ ax[1].plot(ev.episode, ev.cout_eur / 1e6, "o-", ms=3, color="#F26B5B", label="Du
 ax[1].axhline(0.87, ls="--", color=COUL["ILP"], label="ILP 0.87 M€")
 ax[1].set_ylabel("cost (M€)"); ax[1].set_ylim(0, 10.5)
 for a in ax:
-    a.axvspan(700, 800, color="#0F9D9A", alpha=0.12, label="full coverage (ep. 700-800)")
     a.axvline(725, color="k", lw=0.8, ls=":")
-    a.set_xlabel("episode"); a.legend(frameon=False, fontsize=8)
+    a.annotate("final agent (ep. 725)", (725, a.get_ylim()[1] * 0.9), xytext=(-8, 0), textcoords="offset points", ha="right", fontsize=8)
+    a.set_xlim(0, 740); a.set_xlabel("episode"); a.legend(frameon=False, fontsize=8, loc="center right" if a is ax[0] else (0.03, 0.12))
 fig.tight_layout(); fig.savefig(OUT + "training_dueling_gapfix.png", dpi=200); plt.close(fig)
 
 # 2) cost against mean QoS and worst QoS
@@ -69,13 +70,20 @@ fig.tight_layout(); fig.savefig(OUT + "white_vs_cost_gapfix.png", dpi=200); plt.
 crit = {"Cost": ("cout", True), "$\\bar q$": ("q_mean", False), "$q_{min}$": ("q_min", False),
         "$N_H$": ("N_H_cut", True), "$N_T$": ("N_T", True), "Return": ("return_ref", False)}
 rangs = pd.DataFrame({k: full[c].round(3).rank(method="min", ascending=asc).astype(int) for k, (c, asc) in crit.items()})
-rangs["worst rank"] = rangs.max(axis=1)
-fig, ax = plt.subplots(figsize=(8, 3))
-ax.imshow(rangs.values, cmap="RdYlGn_r", vmin=1, vmax=4, aspect="auto")
-ax.set_xticks(range(rangs.shape[1]), rangs.columns); ax.set_yticks(range(len(rangs)), rangs.index)
-for i in range(rangs.shape[0]):
-    for j in range(rangs.shape[1]):
-        ax.text(j, i, rangs.values[i, j], ha="center", va="center", fontsize=11)
+rangs["Worst rank"] = rangs.max(axis=1)
+rangs = rangs.loc[["Dueling DQN", "ILP", "Trajectory-Greedy", "Coverage-Greedy"]]
+FOND = {1: "#CDEBD8", 2: "#E8F3D6", 3: "#FBE9CF", 4: "#F6D3D0"}
+fig, ax = plt.subplots(figsize=(8.5, 2.9))
+for i, (m, r) in enumerate(rangs.iterrows()):
+    for j, v in enumerate(r.values):
+        x = j + (0.25 if j == rangs.shape[1] - 1 else 0)
+        ax.add_patch(plt.Rectangle((x, i), 0.94, 0.88, color=FOND[v], lw=0))
+        ax.text(x + 0.47, i + 0.44, v, ha="center", va="center", fontsize=12,
+                fontweight="bold" if v == 1 else "normal", color="#1B2A49")
+ax.set_xlim(0, rangs.shape[1] + 0.25); ax.set_ylim(len(rangs), -0.35)
+ax.set_xticks([j + 0.47 + (0.25 if j == rangs.shape[1] - 1 else 0) for j in range(rangs.shape[1])], rangs.columns)
+ax.set_yticks([i + 0.44 for i in range(len(rangs))], rangs.index)
+ax.tick_params(length=0); ax.xaxis.tick_top()
 ax.spines[:].set_visible(False)
 fig.tight_layout(); fig.savefig(OUT + "ranks_gapfix.png", dpi=200); plt.close(fig)
 rangs.to_csv(OUT + "ranks_gapfix.csv")
