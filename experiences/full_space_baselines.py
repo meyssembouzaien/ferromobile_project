@@ -12,6 +12,7 @@ Both plans are then replayed in the environment (same metrics as the other basel
 
 Usage (Kaggle, with DEM + crc-covlib) :
   python full_space_baselines.py <repo_root> --couv couverture_potentielle_S1.npz
+  python full_space_baselines.py <repo_root> --sans ORANGE   (one operator removed, coverage computed here)
 Outputs : <repo_root>/resultats/full_space_*.csv
 """
 import argparse, heapq, json, os, sys, time
@@ -22,7 +23,8 @@ from scipy.optimize import milp, LinearConstraint, Bounds
 
 ap = argparse.ArgumentParser()
 ap.add_argument("racine")
-ap.add_argument("--couv", required=True)        # couverture_potentielle_S1.npz
+ap.add_argument("--couv", default=None)         # couverture_potentielle_S1.npz (computed if absent)
+ap.add_argument("--sans", default=None)         # operator removed (generalisation test)
 ap.add_argument("--temps_max_s", type=int, default=5400)
 ap.add_argument("--out", default=None)              # output folder (default <repo_root>/resultats)
 a = ap.parse_args()
@@ -42,7 +44,8 @@ def log(msg):
     print(f"[{time.time() - T0:7.0f} s] {msg}", flush=True)
 
 
-env = FerroMobileEnv(scenario="S1", budget=10_000_000.0, t_max=150, sauvegarder_deploiements_rl=False)
+env = FerroMobileEnv(scenario="S1", budget=10_000_000.0, t_max=150, sauvegarder_deploiements_rl=False,
+                     operateurs_exclus=[a.sans] if a.sans else ())
 env.reset()
 debit = env.debit_reel_par_point.reindex(list(env.points_hors_tunnel)).fillna(0)
 blancs = set(debit[debit < D_COV].index)
@@ -50,7 +53,11 @@ sites0 = set(env.sites_deja_presents)
 log(f"{len(blancs)} white points, {len(sites0)} existing sites")
 
 # Superset coverage (couverture_potentielle.py): range + LOS for every corridor cell and initial white point
-Z = dict(np.load(a.couv))    # load once (NpzFile re-reads the array at every access)
+if a.couv:
+    Z = dict(np.load(a.couv))    # load once (NpzFile re-reads the array at every access)
+else:
+    from couverture_potentielle import calculer
+    Z = calculer(env)            # white points of this configuration
 from prepare_data import TECH_PROFILES
 from environment_rl import BANDES_PAR_GENERATION
 ny = env.grille.ny
