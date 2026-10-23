@@ -206,11 +206,12 @@ class FerroMobileEnv:
             df_scenario = df_scenario[~df_scenario["operateur"].isin(self.operateurs_exclus)]
         self.n_sites_retires = 0
         if self.retrait_sites and self.retrait_actif and np.random.rand() < 0.5:
-            sites = df_scenario[["ant_lat", "ant_lon"]].dropna().round(5).drop_duplicates()
+            # unité retirée : (site, opérateur), 63 sur la ligne ; retirer un opérateur en enlève environ 25 %
+            cle = (df_scenario["ant_lat"].round(5).astype(str) + "_" + df_scenario["ant_lon"].round(5).astype(str)
+                   + "_" + df_scenario["operateur"].astype(str))
+            sites = np.array(sorted(cle[df_scenario["ant_id"].notna()].unique()))
             n = int(np.random.randint(1, int(self.retrait_sites * len(sites)) + 1))
-            retires = sites.iloc[np.random.choice(len(sites), n, replace=False)]
-            cle = df_scenario["ant_lat"].round(5).astype(str) + "_" + df_scenario["ant_lon"].round(5).astype(str)
-            df_scenario = df_scenario[~cle.isin(set(retires.ant_lat.astype(str) + "_" + retires.ant_lon.astype(str)))]
+            df_scenario = df_scenario[~cle.isin(set(np.random.choice(sites, n, replace=False)))]
             self.n_sites_retires = n
         # Réseau réel complet (antennes, sites, canaux d'infrastructure) ...
         self.df_reel_complet = df_scenario[(~df_scenario["in_tunnel"]) & (df_scenario["ant_id"].notna())]
