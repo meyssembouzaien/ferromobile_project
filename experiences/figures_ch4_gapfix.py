@@ -128,4 +128,16 @@ ax.set_xlabel("cost weight $R_{eff}$ (reference 0.2)"); ax.set_ylabel("weight co
 ax.legend(frameon=False, fontsize=9, loc="upper left", bbox_to_anchor=(1, 1))
 fig.tight_layout(); fig.savefig(OUT + "sensitivity_gapfix.png", dpi=200); plt.close(fig)
 
+# 8) ablation: Dueling (final agent, ep. 725) against Vanilla DQN (same settings, 1000 episodes)
+va = pd.read_csv(T + "kaggle_run_wW5_vanilla_gapfix/session2/eval_log.csv")
+fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
+for a, col, lab in [(ax[0], "n_white", "white points (greedy evaluation)"), (ax[1], "cout_eur", "cost (M€)")]:
+    k = 1e6 if col == "cout_eur" else 1
+    a.plot(ev.episode, ev[col] / k, "o-", ms=3, color=COUL["Dueling DQN"], label="Dueling DQN (to final agent, ep. 725)")
+    a.plot(va.episode, va[col] / k, "s-", ms=3, color="#6C5CE7", label="Vanilla DQN")
+    a.set_xlabel("episode"); a.set_ylabel(lab)
+ax[1].set_ylim(0, 10.5)
+fig.legend(*ax[0].get_legend_handles_labels(), frameon=False, fontsize=9, ncol=2, loc="upper center")
+fig.tight_layout(rect=(0, 0, 1, 0.92)); fig.savefig(OUT + "ablation_vanilla_gapfix.png", dpi=200); plt.close(fig)
+
 print(rangs.to_string()); print("training h to ep725", round(train_h, 2), "break-even", round(be, 1))
