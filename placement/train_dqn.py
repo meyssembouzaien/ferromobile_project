@@ -527,7 +527,8 @@ def main():
     verifier_ordre_actions(env, n_configs)
 
     buffer = ReplayBuffer(capacity=CAPACITE_BUFFER, nx=env.grille.nx, ny=env.grille.ny,
-                          n_canaux_etat=N_CANAUX, n_actions=len(env.actions), n_canaux_fixes=N_CANAUX_FIXES)
+                          n_canaux_etat=N_CANAUX, n_actions=len(env.actions),
+                          n_canaux_fixes=9 if RETRAIT_SITES else N_CANAUX_FIXES)   # réseaux variés : infra stockée
     modele_cible.load_state_dict(modele.state_dict())
     # Reprise depuis le dernier checkpoint s'il existe
     episode_depart, epsilon, total_steps = charger_checkpoint(modele, modele_cible, optimiseur, device,
