@@ -30,9 +30,9 @@ tr = pd.read_csv(T + "kaggle_run_wW5_dueling_gapfix/session2/train_log.csv")
 ev, tr = ev[ev.episode <= 725], tr[tr.episode <= 725]       # final agent = episode 725
 fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
 ax[0].plot(tr.episode, tr.n_white.rolling(25).mean(), color="#8A94A6", lw=1, label="training (moving avg. 25)")
-ax[0].plot(ev.episode, ev.n_white, "o-", ms=3, color="#F26B5B", label="greedy evaluation")
+ax[0].plot(ev.episode, ev.n_white, "o-", ms=3, color="#F26B5B", label="evaluation without exploration")
 ax[0].set_ylabel("white points")
-ax[1].plot(ev.episode, ev.cout_eur / 1e6, "o-", ms=3, color="#F26B5B", label="Dueling DQN (greedy evaluation)")
+ax[1].plot(ev.episode, ev.cout_eur / 1e6, "o-", ms=3, color="#F26B5B", label="Dueling DQN (evaluation without exploration)")
 ax[1].axhline(0.87, ls="--", color=COUL["ILP"], label="ILP 0.87 M€")
 ax[1].set_ylabel("cost (M€)"); ax[1].set_ylim(0, 10.5)
 for a in ax:
@@ -131,7 +131,7 @@ fig.tight_layout(); fig.savefig(OUT + "sensitivity_gapfix.png", dpi=200); plt.cl
 # 8) ablation: Dueling (final agent, ep. 725) against Vanilla DQN (same settings, 1000 episodes)
 va = pd.read_csv(T + "kaggle_run_wW5_vanilla_gapfix/session2/eval_log.csv")
 fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
-for a, col, lab in [(ax[0], "n_white", "white points (greedy evaluation)"), (ax[1], "cout_eur", "cost (M€)")]:
+for a, col, lab in [(ax[0], "n_white", "white points (evaluation every 25 episodes)"), (ax[1], "cout_eur", "cost (M€)")]:
     k = 1e6 if col == "cout_eur" else 1
     a.plot(ev.episode, ev[col] / k, "o-", ms=3, color=COUL["Dueling DQN"], label="Dueling DQN (to final agent, ep. 725)")
     a.plot(va.episode, va[col] / k, "s-", ms=3, color="#6C5CE7", label="Vanilla DQN")
