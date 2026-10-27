@@ -17,7 +17,7 @@ R = T + "gap_fix_results/"
 OUT = R + "figures/"
 PLANS = "/home/user/ferromobile_project/experiences/plans_gapfix/"
 COUL = {"Existing network": "#C3C9D3", "Coverage-Greedy": "#A9BCD6", "Trajectory-Greedy": "#6A8CC7",
-        "ILP": "#1F3A6E", "Dueling DQN": "#00897B", "Vanilla DQN": "#9AA3B2"}
+        "ILP": "#1F3A6E", "Dueling DQN": "#E8710A", "Vanilla DQN": "#00897B"}
 plt.rcParams.update({"font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
 
 cc = pd.read_csv(R + "criteres_communs/criteres_communs.csv")
@@ -45,7 +45,8 @@ fig.tight_layout(); fig.savefig(OUT + "training_dueling_gapfix.png", dpi=200); p
 fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
 for a, col, lab in [(ax[0], "q_mean", "mean QoS $\\bar q$"), (ax[1], "q_min", "worst QoS $q_{min}$")]:
     for m, r in full.iterrows():
-        a.scatter(r.cout / 1e6, r[col], s=90, color=COUL[m], zorder=3, label=m)
+        duel = m == "Dueling DQN"
+        a.scatter(r.cout / 1e6, r[col], s=260 if duel else 90, marker="*" if duel else "o", color=COUL[m], zorder=3, label=m)
         a.annotate(f"{r[col]:.3f}", (r.cout / 1e6, r[col]), xytext=(6, 6), textcoords="offset points", fontsize=8)
     a.set_xlabel("deployment cost (M€)"); a.set_ylabel(lab)
 ax[1].axhline(0.5, ls="--", color="grey", lw=0.8); ax[1].text(1.6, 0.505, "critical QoS 0.5", fontsize=8, color="grey")
@@ -59,10 +60,15 @@ tg = pd.read_csv(PLANS + "trajectory_greedy.csv")
 cg_cout = [0, 145, 290, 435, 580, 725, 870, 1015]          # fullspace console.log, CG sites 1-7
 cg_white = [219, 117, 61, 27, 13, 7, 3, 0]
 fig, ax = plt.subplots(figsize=(7.5, 4))
-ax.step([0] + list(du.cout_eur / 1e6), [219] + list(du.n_white), where="post", color=COUL["Dueling DQN"], lw=2, label="Dueling DQN (ep. 725)")
+ax.step([0] + list(du.cout_eur / 1e6), [219] + list(du.n_white), where="post", color=COUL["Dueling DQN"], lw=3, zorder=5, label="Dueling DQN (ep. 725)")
 ax.step([0] + list(tg.cout.cumsum() / 1e6), [219] + list(tg.n_white), where="post", color=COUL["Trajectory-Greedy"], lw=2, label="Trajectory-Greedy")
 ax.step(np.array(cg_cout) / 1e3, cg_white, where="post", color=COUL["Coverage-Greedy"], lw=2, label="Coverage-Greedy")
 ax.scatter([0.87], [0], s=110, marker="D", color=COUL["ILP"], zorder=4, label="ILP (final plan, 0.87 M€)")
+vt = pd.read_csv(T + "kaggle_run_wW5_vanilla_gapfix/session2/eval_trace_ep550.csv")
+vt = vt[vt.action != "STOP"]
+ax.step([0] + list(vt.cout_eur / 1e6), [219] + list(vt.n_white), where="post", color=COUL["Vanilla DQN"], lw=2, ls="--",
+        label=f"Vanilla DQN (best evaluation: {vt.n_white.iloc[-1]} left at {vt.cout_eur.iloc[-1] / 1e6:.2f} M€)")
+ax.set_xlim(-0.05, 2.5)
 ax.set_xlabel("cumulative cost (M€)"); ax.set_ylabel("white points"); ax.legend(frameon=False, fontsize=9)
 fig.tight_layout(); fig.savefig(OUT + "white_vs_cost_gapfix.png", dpi=200); plt.close(fig)
 
@@ -84,6 +90,7 @@ ax.set_xlim(0, rangs.shape[1] + 0.25); ax.set_ylim(len(rangs), -0.35)
 ax.set_xticks([j + 0.47 + (0.25 if j == rangs.shape[1] - 1 else 0) for j in range(rangs.shape[1])], rangs.columns)
 ax.set_yticks([i + 0.44 for i in range(len(rangs))], rangs.index)
 ax.tick_params(length=0); ax.xaxis.tick_top()
+ax.get_yticklabels()[0].set_color(COUL["Dueling DQN"]); ax.get_yticklabels()[0].set_fontweight("bold")
 ax.spines[:].set_visible(False)
 fig.tight_layout(); fig.savefig(OUT + "ranks_gapfix.png", dpi=200); plt.close(fig)
 rangs.to_csv(OUT + "ranks_gapfix.csv")
