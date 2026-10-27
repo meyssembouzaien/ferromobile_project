@@ -16,8 +16,8 @@ T = "/mnt/project-files/training/"
 R = T + "gap_fix_results/"
 OUT = R + "figures/"
 PLANS = "/home/user/ferromobile_project/experiences/plans_gapfix/"
-COUL = {"Existing network": "#8A94A6", "Coverage-Greedy": "#0F9D9A", "Trajectory-Greedy": "#F5A623",
-        "ILP": "#1B2A49", "Dueling DQN": "#F26B5B"}
+COUL = {"Existing network": "#C3C9D3", "Coverage-Greedy": "#A9BCD6", "Trajectory-Greedy": "#6A8CC7",
+        "ILP": "#1F3A6E", "Dueling DQN": "#00897B", "Vanilla DQN": "#9AA3B2"}
 plt.rcParams.update({"font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
 
 cc = pd.read_csv(R + "criteres_communs/criteres_communs.csv")
@@ -29,10 +29,10 @@ ev = pd.read_csv(T + "kaggle_run_wW5_dueling_gapfix/session2/eval_log.csv")
 tr = pd.read_csv(T + "kaggle_run_wW5_dueling_gapfix/session2/train_log.csv")
 ev, tr = ev[ev.episode <= 725], tr[tr.episode <= 725]       # final agent = episode 725
 fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
-ax[0].plot(tr.episode, tr.n_white.rolling(25).mean(), color="#8A94A6", lw=1, label="training (moving avg. 25)")
-ax[0].plot(ev.episode, ev.n_white, "o-", ms=3, color="#F26B5B", label="evaluation without exploration")
+ax[0].plot(tr.episode, tr.n_white.rolling(25).mean(), color="#9AA3B2", lw=1, label="training (moving avg. 25)")
+ax[0].plot(ev.episode, ev.n_white, "o-", ms=3, color=COUL["Dueling DQN"], label="evaluation without exploration")
 ax[0].set_ylabel("white points")
-ax[1].plot(ev.episode, ev.cout_eur / 1e6, "o-", ms=3, color="#F26B5B", label="Dueling DQN (evaluation without exploration)")
+ax[1].plot(ev.episode, ev.cout_eur / 1e6, "o-", ms=3, color=COUL["Dueling DQN"], label="Dueling DQN (evaluation without exploration)")
 ax[1].axhline(0.87, ls="--", color=COUL["ILP"], label="ILP 0.87 M€")
 ax[1].set_ylabel("cost (M€)"); ax[1].set_ylim(0, 10.5)
 for a in ax:
@@ -72,14 +72,14 @@ crit = {"Cost": ("cout", True), "$\\bar q$": ("q_mean", False), "$q_{min}$": ("q
 rangs = pd.DataFrame({k: full[c].round(3).rank(method="min", ascending=asc).astype(int) for k, (c, asc) in crit.items()})
 rangs["Worst rank"] = rangs.max(axis=1)
 rangs = rangs.loc[["Dueling DQN", "ILP", "Trajectory-Greedy", "Coverage-Greedy"]]
-FOND = {1: "#CDEBD8", 2: "#E8F3D6", 3: "#FBE9CF", 4: "#F6D3D0"}
+FOND = {1: "#DCE6F2", 2: "#B9CCE5", 3: "#8EA9D1", 4: "#5B7DB1"}
 fig, ax = plt.subplots(figsize=(8.5, 2.9))
 for i, (m, r) in enumerate(rangs.iterrows()):
     for j, v in enumerate(r.values):
         x = j + (0.25 if j == rangs.shape[1] - 1 else 0)
         ax.add_patch(plt.Rectangle((x, i), 0.94, 0.88, color=FOND[v], lw=0))
         ax.text(x + 0.47, i + 0.44, v, ha="center", va="center", fontsize=12,
-                fontweight="bold" if v == 1 else "normal", color="#1B2A49")
+                fontweight="bold" if v == 1 else "normal", color="white" if v == 4 else "#1F3A6E")
 ax.set_xlim(0, rangs.shape[1] + 0.25); ax.set_ylim(len(rangs), -0.35)
 ax.set_xticks([j + 0.47 + (0.25 if j == rangs.shape[1] - 1 else 0) for j in range(rangs.shape[1])], rangs.columns)
 ax.set_yticks([i + 0.44 for i in range(len(rangs))], rangs.index)
@@ -110,7 +110,7 @@ ax.bar(bu.B, bu.n_white, color=COUL["Dueling DQN"], width=0.7, label="white poin
 ax.set_xlabel("budget B (M€)"); ax.set_ylabel("white points left")
 ax2 = ax.twinx(); ax2.plot(bu.B, bu.cout_eur / 1e6, "ko-", label="cost spent (M€)"); ax2.set_ylabel("cost spent (M€)")
 ax2.spines["top"].set_visible(False)
-ax.axvspan(7, 13, color="#0F9D9A", alpha=0.08); ax.text(8.3, max(bu.n_white) * 0.9, "near training budget", fontsize=8)
+ax.axvspan(7, 13, color="#00897B", alpha=0.08); ax.text(8.3, max(bu.n_white) * 0.9, "near training budget", fontsize=8)
 h1, l1 = ax.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
 ax.legend(h1 + h2, l1 + l2, frameon=False, fontsize=8, loc=(0.6, 0.5))
 fig.tight_layout(); fig.savefig(OUT + "budget_gapfix.png", dpi=200); plt.close(fig)
@@ -134,7 +134,7 @@ fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
 for a, col, lab in [(ax[0], "n_white", "white points (evaluation every 25 episodes)"), (ax[1], "cout_eur", "cost (M€)")]:
     k = 1e6 if col == "cout_eur" else 1
     a.plot(ev.episode, ev[col] / k, "o-", ms=3, color=COUL["Dueling DQN"], label="Dueling DQN (to final agent, ep. 725)")
-    a.plot(va.episode, va[col] / k, "s-", ms=3, color="#6C5CE7", label="Vanilla DQN")
+    a.plot(va.episode, va[col] / k, "s-", ms=3, color=COUL["Vanilla DQN"], label="Vanilla DQN")
     a.set_xlabel("episode"); a.set_ylabel(lab)
 ax[1].set_ylim(0, 10.5)
 fig.legend(*ax[0].get_legend_handles_labels(), frameon=False, fontsize=9, ncol=2, loc="upper center")
@@ -151,7 +151,7 @@ fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
 avant = ge.groupby("op", sort=False).n_avant.first().values
 du_w = ge[ge.methode == "Dueling ep725"].n_white.values
 ilp_w = ge[ge.methode == "ILP"].n_white.values
-ax[0].bar(x - w, avant, w, color="#8A94A6", label="existing network")
+ax[0].bar(x - w, avant, w, color=COUL["Existing network"], label="existing network")
 ax[0].bar(x, du_w, w, color=COUL["Dueling DQN"], label="Dueling DQN (ep. 725, no retraining)")
 ax[0].bar(x + w, ilp_w, w, color=COUL["ILP"], label="ILP (recomputed)")
 for i, (a, d) in enumerate(zip(avant, du_w)):

@@ -15,7 +15,7 @@ import pandas as pd
 ICI = os.path.dirname(os.path.abspath(__file__))
 RACINE = os.path.dirname(ICI)
 D_COV = 1.0
-COULEURS = {"2G": "#9e9e9e", "3G": "#e69f00", "4G": "#1f3b73", "5G": "#56b4e9"}
+COULEURS = {"2G": "#B0B7C3", "3G": "#6A8CC7", "4G": "#1F3A6E", "5G": "#00897B"}
 
 e = pd.read_csv(os.path.join(RACINE, "data", "processed", "dataset_enrichi.csv"), low_memory=False,
                 usecols=["point_id", "distance_km", "in_tunnel", "generation", "debit_adj_mbps", "scenario_id"])
