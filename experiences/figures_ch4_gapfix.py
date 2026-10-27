@@ -17,12 +17,13 @@ R = T + "gap_fix_results/"
 OUT = R + "figures/"
 PLANS = "/home/user/ferromobile_project/experiences/plans_gapfix/"
 COUL = {"Existing network": "#C3C9D3", "Coverage-Greedy": "#A9BCD6", "Trajectory-Greedy": "#6A8CC7",
-        "ILP": "#1F3A6E", "Dueling DQN": "#E8710A", "Vanilla DQN": "#00897B"}
+        "ILP": "#1F3A6E", "Dueling DQN": "#C2185B", "Vanilla DQN": "#00897B"}
 plt.rcParams.update({"font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
 
 cc = pd.read_csv(R + "criteres_communs/criteres_communs.csv")
-cc["methode"] = cc.methode.replace({"Dueling DQN ep725": "Dueling DQN"})
+cc["methode"] = cc.methode.replace({"Dueling DQN ep725": "Dueling DQN", "Vanilla DQN ep550": "Vanilla DQN"})
 full = cc[cc.methode.isin(["Coverage-Greedy", "Trajectory-Greedy", "ILP", "Dueling DQN"])].set_index("methode")
+comp = cc[cc.methode.isin(list(full.index) + ["Vanilla DQN"])].set_index("methode")   # + Vanilla (not full coverage)
 
 # 1) training of the Dueling DQN: greedy evaluations every 25 episodes
 ev = pd.read_csv(T + "kaggle_run_wW5_dueling_gapfix/session2/eval_log.csv")
@@ -44,12 +45,15 @@ fig.tight_layout(); fig.savefig(OUT + "training_dueling_gapfix.png", dpi=200); p
 # 2) cost against mean QoS and worst QoS
 fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
 for a, col, lab in [(ax[0], "q_mean", "mean QoS $\\bar q$"), (ax[1], "q_min", "worst QoS $q_{min}$")]:
-    for m, r in full.iterrows():
-        duel = m == "Dueling DQN"
-        a.scatter(r.cout / 1e6, r[col], s=260 if duel else 90, marker="*" if duel else "o", color=COUL[m], zorder=3, label=m)
-        a.annotate(f"{r[col]:.3f}", (r.cout / 1e6, r[col]), xytext=(6, 6), textcoords="offset points", fontsize=8)
-    a.set_xlabel("deployment cost (M€)"); a.set_ylabel(lab)
-ax[1].axhline(0.5, ls="--", color="grey", lw=0.8); ax[1].text(1.6, 0.505, "critical QoS 0.5", fontsize=8, color="grey")
+    for m, r in comp.iterrows():
+        duel, van = m == "Dueling DQN", m == "Vanilla DQN"
+        a.scatter(r.cout / 1e6, r[col], s=260 if duel else 90, marker="*" if duel else ("s" if van else "o"), color=COUL[m], zorder=3,
+                  label=f"{m} ({r.n_white:.0f} white points left)" if van else m)
+        dx, dy, ha = ((-8, 6, "right") if col == "q_mean" else (0, -16, "center")) if m == "ILP" else (6, 6, "left")     # ILP and CG share values: labels on both sides
+        a.annotate(f"{r[col]:.3f}", (r.cout / 1e6, r[col]), xytext=(dx, dy), textcoords="offset points", fontsize=8, ha=ha)
+    a.set_xscale("log"); a.set_xlim(0.7, 13); a.set_xticks([0.8, 1, 1.5, 2, 3, 5, 10], ["0.8", "1", "1.5", "2", "3", "5", "10"]); a.minorticks_off()
+    a.set_xlabel("deployment cost (M€, log scale)"); a.set_ylabel(lab)
+ax[1].axhline(0.5, ls="--", color="grey", lw=0.8); ax[1].text(3, 0.515, "critical QoS 0.5", fontsize=8, color="grey")
 ax[0].legend(frameon=False, fontsize=8)
 fig.tight_layout(); fig.savefig(OUT + "cost_vs_qos_gapfix.png", dpi=200); plt.close(fig)
 
@@ -73,19 +77,19 @@ ax.set_xlabel("cumulative cost (M€)"); ax.set_ylabel("white points"); ax.legen
 fig.tight_layout(); fig.savefig(OUT + "white_vs_cost_gapfix.png", dpi=200); plt.close(fig)
 
 # 4) rank of each method on each criterion (1 = best, ties share the best rank)
-crit = {"Cost": ("cout", True), "$\\bar q$": ("q_mean", False), "$q_{min}$": ("q_min", False),
+crit = {"White pts": ("n_white", True), "Cost": ("cout", True), "$\\bar q$": ("q_mean", False), "$q_{min}$": ("q_min", False),
         "$N_H$": ("N_H_cut", True), "$N_T$": ("N_T", True), "Return": ("return_ref", False)}
-rangs = pd.DataFrame({k: full[c].round(3).rank(method="min", ascending=asc).astype(int) for k, (c, asc) in crit.items()})
+rangs = pd.DataFrame({k: comp[c].round(3).rank(method="min", ascending=asc).astype(int) for k, (c, asc) in crit.items()})
 rangs["Worst rank"] = rangs.max(axis=1)
-rangs = rangs.loc[["Dueling DQN", "ILP", "Trajectory-Greedy", "Coverage-Greedy"]]
-FOND = {1: "#DCE6F2", 2: "#B9CCE5", 3: "#8EA9D1", 4: "#5B7DB1"}
-fig, ax = plt.subplots(figsize=(8.5, 2.9))
+rangs = rangs.loc[["Dueling DQN", "ILP", "Trajectory-Greedy", "Coverage-Greedy", "Vanilla DQN"]]
+FOND = {1: "#DCE6F2", 2: "#B9CCE5", 3: "#8EA9D1", 4: "#5B7DB1", 5: "#2E4A7D"}
+fig, ax = plt.subplots(figsize=(9.5, 3.4))
 for i, (m, r) in enumerate(rangs.iterrows()):
     for j, v in enumerate(r.values):
         x = j + (0.25 if j == rangs.shape[1] - 1 else 0)
         ax.add_patch(plt.Rectangle((x, i), 0.94, 0.88, color=FOND[v], lw=0))
         ax.text(x + 0.47, i + 0.44, v, ha="center", va="center", fontsize=12,
-                fontweight="bold" if v == 1 else "normal", color="white" if v == 4 else "#1F3A6E")
+                fontweight="bold" if v == 1 else "normal", color="white" if v >= 4 else "#1F3A6E")
 ax.set_xlim(0, rangs.shape[1] + 0.25); ax.set_ylim(len(rangs), -0.35)
 ax.set_xticks([j + 0.47 + (0.25 if j == rangs.shape[1] - 1 else 0) for j in range(rangs.shape[1])], rangs.columns)
 ax.set_yticks([i + 0.44 for i in range(len(rangs))], rangs.index)
