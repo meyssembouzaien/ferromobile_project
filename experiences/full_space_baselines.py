@@ -22,7 +22,8 @@ from scipy.optimize import milp, LinearConstraint, Bounds
 
 ap = argparse.ArgumentParser()
 ap.add_argument("racine")
-ap.add_argument("--couv", required=True)        # couverture_potentielle_S1.npz
+ap.add_argument("--couv", default=None)         # couverture_potentielle_S1.npz (computed if absent)
+ap.add_argument("--niveaux", default="")       # e.g. "20,10,5": min cost to leave at most k white points (ILP only)
 ap.add_argument("--temps_max_s", type=int, default=5400)
 ap.add_argument("--out", default=None)              # output folder (default <repo_root>/resultats)
 a = ap.parse_args()
@@ -50,7 +51,11 @@ sites0 = set(env.sites_deja_presents)
 log(f"{len(blancs)} white points, {len(sites0)} existing sites")
 
 # Superset coverage (couverture_potentielle.py): range + LOS for every corridor cell and initial white point
-Z = dict(np.load(a.couv))    # load once (NpzFile re-reads the array at every access)
+if a.couv:
+    Z = dict(np.load(a.couv))    # load once (NpzFile re-reads the array at every access)
+else:
+    from couverture_potentielle import calculer
+    Z = calculer(env)
 from prepare_data import TECH_PROFILES
 from environment_rl import BANDES_PAR_GENERATION
 ny = env.grille.ny
@@ -97,13 +102,14 @@ log(f"superset check: {violations} of {len(echantillon)} sampled deployments cov
 
 
 # ---------------------------------------------------------------- ILP
-def resoudre_ilp():
+def resoudre_ilp(k=0):
     acts = [d for d in couv if cov(d)]
     nouv = sorted({(d[0], d[1]) for d in acts} - sites0)
     iy = {c: i for i, c in enumerate(nouv)}
     pts = sorted(set().union(*[cov(d) for d in acts]))
     nA, nY = len(acts), len(nouv)
-    cout = np.r_[[get_radio_cost(d[2], d[3]) for d in acts], [C_SITE_EUR] * nY]
+    nZ = len(pts) if k else 0        # z_p = 1 if point p must be covered (partial coverage)
+    cout = np.r_[[get_radio_cost(d[2], d[3]) for d in acts], [C_SITE_EUR] * nY, [0] * nZ]
     rows, cols, vals, lo, hi, r = [], [], [], [], [], 0
     for j, d in enumerate(acts):
         c = (d[0], d[1])
@@ -113,11 +119,18 @@ def resoudre_ilp():
     for j, d in enumerate(acts):
         for p in cov(d):
             couvreurs[p].append(j)
-    for p in pts:
+    for i, p in enumerate(pts):
         rows += [r] * len(couvreurs[p]); cols += couvreurs[p]; vals += [1] * len(couvreurs[p])
-        lo.append(1); hi.append(np.inf); r += 1
-    A = sparse.csr_matrix((vals, (rows, cols)), shape=(r, nA + nY))
-    res = milp(cout, constraints=LinearConstraint(A, lo, hi), integrality=np.ones(nA + nY), bounds=Bounds(0, 1),
+        if k:
+            rows.append(r); cols.append(nA + nY + i); vals.append(-1); lo.append(0)
+        else:
+            lo.append(1)
+        hi.append(np.inf); r += 1
+    if k:    # at most k white points left
+        rows += [r] * nZ; cols += list(range(nA + nY, nA + nY + nZ)); vals += [1] * nZ
+        lo.append(len(blancs) - k); hi.append(np.inf); r += 1
+    A = sparse.csr_matrix((vals, (rows, cols)), shape=(r, nA + nY + nZ))
+    res = milp(cout, constraints=LinearConstraint(A, lo, hi), integrality=np.ones(nA + nY + nZ), bounds=Bounds(0, 1),
                options={"time_limit": a.temps_max_s, "mip_rel_gap": 0.0})
     if res.x is None:
         raise RuntimeError(res.message)
@@ -125,6 +138,33 @@ def resoudre_ilp():
     log(f"  milp status {res.status}, dual bound {getattr(res, 'mip_dual_bound', None)}, gap {getattr(res, 'mip_gap', None)}")
     return choisies, float(cout @ np.round(res.x)), res.status == 0, len(pts), nA
 
+
+
+def ilp_exact(k=0):
+    it = 0
+    while True:    # lazy exact check of the chosen deployments
+        it += 1
+        choisies, c, prouve, n_pts, nA = resoudre_ilp(k)
+        a_verifier = [d for d in choisies if d not in exact]
+        log(f"ILP k={k} iteration {it}: {len(choisies)} deployments, {c:,.0f} EUR, proven={prouve}, "
+            f"{n_pts} coverable points, {nA} candidates, {len(a_verifier)} to check")
+        if not a_verifier:
+            return choisies, c, prouve
+        for d in a_verifier:
+            couverture_exacte(d)
+
+
+if a.niveaux:
+    lignes = []
+    for k in [int(x) for x in a.niveaux.split(",")]:
+        choisies, c, prouve = ilp_exact(k)
+        n_blancs = len(blancs - set().union(set(), *[exact[d] for d in choisies]))
+        lignes.append({"k_max_blancs": k, "cout_eur": c, "prouve_optimal": prouve, "n_white_exact": n_blancs,
+                       "deploiements": len(choisies), "plan": json.dumps([list(map(str, d)) for d in choisies])})
+        log(f"level k={k}: {lignes[-1]}")
+        pd.DataFrame(lignes).to_csv(os.path.join(OUT, "ilp_niveaux.csv"), index=False)
+    log("done")
+    sys.exit(0)
 
 it = 0
 while True:
