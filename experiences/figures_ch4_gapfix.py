@@ -141,3 +141,25 @@ fig.legend(*ax[0].get_legend_handles_labels(), frameon=False, fontsize=9, ncol=2
 fig.tight_layout(rect=(0, 0, 1, 0.92)); fig.savefig(OUT + "ablation_vanilla_gapfix.png", dpi=200); plt.close(fig)
 
 print(rangs.to_string()); print("training h to ep725", round(train_h, 2), "break-even", round(be, 1))
+
+# 9) generalisation: one operator removed, trained policy (no retraining) against the ILP recomputed
+ge = pd.read_csv(R + "generalisation_operateurs/comparaison_generalisation.csv")
+ge["op"] = ge.config.map({"sans ORANGE": "No Orange", "sans SFR": "No SFR", "sans BOUYGUES TELECOM": "No Bouygues", "sans FREE MOBILE": "No Free"})
+ops = list(dict.fromkeys(ge.op))
+x = np.arange(len(ops)); w = 0.27
+fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
+avant = ge.groupby("op", sort=False).n_avant.first().values
+du_w = ge[ge.methode == "Dueling ep725"].n_white.values
+ilp_w = ge[ge.methode == "ILP"].n_white.values
+ax[0].bar(x - w, avant, w, color="#8A94A6", label="existing network")
+ax[0].bar(x, du_w, w, color=COUL["Dueling DQN"], label="Dueling DQN (ep. 725, no retraining)")
+ax[0].bar(x + w, ilp_w, w, color=COUL["ILP"], label="ILP (recomputed)")
+for i, (a, d) in enumerate(zip(avant, du_w)):
+    ax[0].text(i, d + 5, f"{100 * (a - d) / a:.0f}%", ha="center", fontsize=8)
+    ax[0].text(i + w, 5, "0", ha="center", fontsize=8, color=COUL["ILP"])
+ax[0].set_ylabel("white points"); ax[0].set_xticks(x, ops)
+ax[1].bar(x - w / 2, ge[ge.methode == "Dueling ep725"].cout.values, w, color=COUL["Dueling DQN"])
+ax[1].bar(x + w / 2, ge[ge.methode == "ILP"].cout.values, w, color=COUL["ILP"])
+ax[1].set_ylabel("cost (M€)"); ax[1].set_xticks(x, ops)
+fig.legend(*ax[0].get_legend_handles_labels(), frameon=False, fontsize=9, ncol=3, loc="upper center")
+fig.tight_layout(rect=(0, 0, 1, 0.92)); fig.savefig(OUT + "generalisation_gapfix.png", dpi=200); plt.close(fig)
