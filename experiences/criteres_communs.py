@@ -96,6 +96,7 @@ lignes += [rejouer("Coverage-Greedy", plan_csv("coverage_greedy.csv")),
            rejouer("Trajectory-Greedy", plan_csv("trajectory_greedy.csv")),
            rejouer("ILP", plan_csv("ilp.csv")),
            rejouer("Dueling DQN ep725", plan_trace("dueling_ep725.csv")),
+           rejouer("Vanilla DQN ep550", plan_trace("vanilla_ep550.csv")),
            rejouer("Dueling DQN ep1000", plan_trace("dueling_ep1000.csv"))]
 
 os.makedirs(os.path.join(RACINE, "resultats"), exist_ok=True)
