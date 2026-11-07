@@ -85,6 +85,9 @@ OPTIONS_ENV = {k: True for k, v in [("stop_si_couvert", STOP_SI_COUVERT), ("masq
                                     ("canal_couverture", CANAL_COUVERTURE)] if v}
 if RETRAIT_SITES:
     OPTIONS_ENV["retrait_sites"] = RETRAIT_SITES
+CV_SECTEUR = os.environ.get("FM_CV_SECTOR", "")   # CV spatiale : secteur (0-3) jamais retiré à l'entraînement
+if CV_SECTEUR:
+    OPTIONS_ENV["secteur_protege"] = int(CV_SECTEUR)
 INIT_DEPUIS = os.environ.get("FM_INIT_FROM", "")
 POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_TRANS, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
 
@@ -97,6 +100,7 @@ _SUFFIXE = ((f"_wT{POIDS_TRANS:g}" if POIDS_TRANS != 1.0 else "")
             + ("_cov" if CANAL_COUVERTURE else "")
             + ("_wide" if VUE_LARGE else "")
             + (f"_drop{RETRAIT_SITES:g}" if RETRAIT_SITES else "")
+            + (f"_cv{CV_SECTEUR}" if CV_SECTEUR else "")
             + ("_ft" if INIT_DEPUIS else ""))
 NOM_RUN = os.environ.get("FM_RUN", f"{ARCHITECTURE}_{MODE_EXPLORATION}_wW{POIDS_W:g}{_SUFFIXE}_seed{SEED}")
 DOSSIER_CHECKPOINTS = os.path.join(os.environ.get("FM_CHECKPOINTS", os.path.join(RACINE_PROJET, "checkpoints")),

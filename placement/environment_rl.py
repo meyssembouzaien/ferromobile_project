@@ -75,6 +75,20 @@ def _decompacter(compact):
             for pid, (q, d, rtt, ber) in zip(pids, valeurs.tolist())]
 
 
+def cle_site(df):
+    """Clé d'un site physique : position de l'antenne arrondie."""
+    return df["ant_lat"].round(5).astype(str) + "_" + df["ant_lon"].round(5).astype(str)
+
+
+def sites_par_secteur(df, n_secteurs=4):
+    """Secteur de chaque site : tronçon (n parts égales de la ligne) de son point le mieux servi."""
+    k = df[df["ant_id"].notna() & ~df["in_tunnel"]]
+    meilleur = k.loc[k.assign(cle=cle_site(k)).groupby("cle")["debit_adj_mbps"].idxmax()]
+    L = df["distance_km"].max()
+    secteur = np.minimum((meilleur["distance_km"] / L * n_secteurs).astype(int), n_secteurs - 1)
+    return dict(zip(cle_site(meilleur), secteur))
+
+
 def vider_cache_simulation():
     _CACHE_SIMULATION.clear()
 
@@ -99,7 +113,7 @@ class FerroMobileEnv:
                  points_evalues=None, points_stats=None, operateurs_exclus=(),
                  actions_autorisees=None, stop_si_couvert=False, masque_utile=False,
                  r_fin_blancs_initiaux=False, canal_couverture=False, chemin_couverture=None,
-                 retrait_sites=0.0):
+                 retrait_sites=0.0, secteur_protege=None, secteur_retire=None):
         self.scenario = scenario
         # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
@@ -107,6 +121,10 @@ class FerroMobileEnv:
         # Réseaux variés : à chaque reset, une fois sur deux, on retire jusqu'à cette part des sites existants
         self.retrait_sites = retrait_sites
         self.retrait_actif = True   # False pendant l'évaluation gloutonne (réseau complet)
+        # Validation croisée spatiale : secteur jamais retiré à l'entraînement / secteur retiré au test
+        self.secteur_protege = secteur_protege
+        self.secteur_retire = secteur_retire
+        self._secteurs = None
         self.budget_total = budget
         self.poids = poids or {"w_Q": 1.0, "w_W": 1.0, "w_H": 1.0, "w_O": 1.0, "w_T": 1.0}
         self.Q_critique = Q_critique
@@ -205,11 +223,21 @@ class FerroMobileEnv:
             # Expérience C niveau 2 : on retire les liens de ces opérateurs
             df_scenario = df_scenario[~df_scenario["operateur"].isin(self.operateurs_exclus)]
         self.n_sites_retires = 0
+        if self.secteur_protege is not None or self.secteur_retire is not None:
+            if self._secteurs is None:
+                self._secteurs = sites_par_secteur(df_scenario)
+            secteur_site = cle_site(df_scenario).map(self._secteurs)
+        if self.secteur_retire is not None:
+            # test : tous les sites du secteur disparaissent (tous opérateurs)
+            df_scenario = df_scenario[secteur_site.reindex(df_scenario.index) != self.secteur_retire]
         if self.retrait_sites and self.retrait_actif and np.random.rand() < 0.5:
             # unité retirée : (site, opérateur), 63 sur la ligne ; retirer un opérateur en enlève environ 25 %
             cle = (df_scenario["ant_lat"].round(5).astype(str) + "_" + df_scenario["ant_lon"].round(5).astype(str)
                    + "_" + df_scenario["operateur"].astype(str))
-            sites = np.array(sorted(cle[df_scenario["ant_id"].notna()].unique()))
+            eligibles = df_scenario["ant_id"].notna()
+            if self.secteur_protege is not None:
+                eligibles &= secteur_site.reindex(df_scenario.index) != self.secteur_protege
+            sites = np.array(sorted(cle[eligibles].unique()))
             n = int(np.random.randint(1, int(self.retrait_sites * len(sites)) + 1))
             df_scenario = df_scenario[~cle.isin(set(np.random.choice(sites, n, replace=False)))]
             self.n_sites_retires = n

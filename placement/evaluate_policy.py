@@ -77,7 +77,7 @@ def petite_instance_actions(env):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("checkpoint")
-    p.add_argument("experiences", nargs="+", choices=["final", "budget", "operateurs", "meteo", "pli", "petite"])
+    p.add_argument("experiences", nargs="+", choices=["final", "budget", "operateurs", "meteo", "pli", "petite", "secteurs"])
     p.add_argument("--pli", type=int, default=0)
     args = p.parse_args()
 
@@ -111,6 +111,10 @@ def main():
         elif exp == "operateurs":
             for o in OPERATEURS:
                 lignes.append(evaluer(env_(operateurs_exclus=[o]), etat_ckpt, classe, device, "operateurs", f"sans {o}"))
+        elif exp == "secteurs":
+            # CV spatiale : tous les sites d'un secteur retirés (nouvelles zones blanches)
+            for k in range(4):
+                lignes.append(evaluer(env_(secteur_retire=k), etat_ckpt, classe, device, "secteurs", f"sans secteur {k}"))
         elif exp == "meteo":
             for s in ["S2", "S3", "S4"]:
                 lignes.append(evaluer(env_(scenario=s), etat_ckpt, classe, device, "meteo", s))
