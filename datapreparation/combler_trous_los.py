@@ -96,6 +96,9 @@ def main():
             refuses.append((trou[0], len(trou), "antenne hors portee"))
 
     pts_combles = {l["point_id"] for l in nouvelles}
+    if not nouvelles:
+        print(f"Aucun trou comblé ({len(refuses)} refusés) : datasets inchangés", refuses)
+        return
     ajout = pd.DataFrame(nouvelles)
     ajout["gen_num"] = ajout.generation.map({"2G": 1, "3G": 2, "4G": 3, "5G": 4}).fillna(0).astype(int)
     ajout["veg_num"] = ajout.vegetation.map({"plaine": 0, "urbain": 1, "foret_legere": 2, "foret_dense": 3}).fillna(0).astype(int)

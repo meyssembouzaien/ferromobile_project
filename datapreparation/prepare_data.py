@@ -97,6 +97,8 @@ for _cand in ["TerrainElevDataSource", "TerrainElevSource", "ElevDataSource"]:
         break
 
 TRONCON_KM_MAX = 40.0
+if os.environ.get("FM_LIGNE_DIR"):  # 2e ligne : tout le tronçon
+    TRONCON_KM_MAX = 1e9
 
 # (portée km, rtt_min, rtt_max, débit_max, débit_min, impact_vitesse dB, ber_ref, pente, type)
 TECH_PROFILES = {
