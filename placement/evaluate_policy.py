@@ -46,7 +46,10 @@ def evaluer(env, etat_ckpt, classe, device, experience, configuration, extra=Non
     modele = classe(n_configs, env.grille.corridor_mask,
                     n_canaux=T.N_CANAUX_ETAT + (3 if config.get("canal_couverture") else 0),
                     dilatations=T.DILATATIONS + ((32,) if config.get("vue_large") else ())).to(device)
-    modele.load_state_dict(etat_ckpt["modele"])
+    # indices_actions vient du masque du corridor : on garde celui de cet env (autre ligne possible)
+    poids = dict(etat_ckpt["modele"])
+    poids["indices_actions"] = modele.indices_actions
+    modele.load_state_dict(poids)
     modele.eval()
     env.reset()
     n_avant = env._dernier_n_white

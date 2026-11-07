@@ -71,6 +71,8 @@ os.makedirs(os.path.join(BASE_DIR, "data", "raw"), exist_ok=True)
 # on filtre ici pour ne garder que le tronçon d'intérêt.
 TRONCON_KM_MIN = 0.0
 TRONCON_KM_MAX = 30.0
+if os.environ.get("FM_LIGNE_DIR"):  # 2e ligne : tout le tronçon
+    TRONCON_KM_MAX = 1e9
 
 # Résolution spatiale des clusters (km).
 # Sur 30 km avec CLUSTER_KM=10 → 4 clusters, ce qui est cohérent

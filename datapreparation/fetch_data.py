@@ -104,6 +104,16 @@ OVERPASS_HEADERS = {
 }
 OVERPASS_BBOX_PN = "(45.53,3.53,45.76,3.76)"
 
+# Autre ligne (test de généralisation) : FM_LIGNE_DIR contient trace.csv et tunnels.csv
+# (sortie de fetch_trace_ligne.py). Le premier point du tracé est le départ.
+LIGNE_DIR = os.environ.get("FM_LIGNE_DIR", "")
+LIGNE_CODE = os.environ.get("FM_LIGNE_CODE", "785000")
+# FM_DEM_SOURCE=glo30 : raster local depuis Copernicus GLO-30 (AWS) au lieu
+# d'OpenTopoData (limité à 1000 requêtes par jour, trop peu pour un 2e corridor)
+DEM_SOURCE = os.environ.get("FM_DEM_SOURCE", "opentopodata")
+if LIGNE_DIR:
+    ANFR_DEPTS = ["063", "043", "042"]
+
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -242,7 +252,7 @@ def load_trace(csv_path: Path, spacing_m: int = SPACING_M) -> list[dict]:
     d_start = haversine_km(*coords[0], *COURPIERE)
     d_end   = haversine_km(*coords[-1], *COURPIERE)
 
-    if d_end < d_start:
+    if not LIGNE_DIR and d_end < d_start:
         coords = coords[::-1]
         print("  ✓ Tracé inversé → orientation Courpière→Ambert")
 
@@ -285,13 +295,17 @@ def _sncf_get_all(dataset: str, where: str) -> list[dict]:
     return records
 
 
-def _pn_from_osm() -> pd.DataFrame:
+def _pn_from_osm(pts: list[dict] | None = None) -> pd.DataFrame:
     """Récupère les passages à niveau via Overpass (fallback)."""
+    bbox = OVERPASS_BBOX_PN
+    if LIGNE_DIR and pts:
+        la = [p["lat"] for p in pts]; lo = [p["lon"] for p in pts]
+        bbox = f"({min(la) - 0.01:.3f},{min(lo) - 0.01:.3f},{max(la) + 0.01:.3f},{max(lo) + 0.01:.3f})"
     query = f"""
 [out:json][timeout:25];
 (
-  node["railway"="level_crossing"]{OVERPASS_BBOX_PN};
-  node["railway"="crossing"]{OVERPASS_BBOX_PN};
+  node["railway"="level_crossing"]{bbox};
+  node["railway"="crossing"]{bbox};
 );
 out body;
 """
@@ -349,7 +363,7 @@ def fetch_passages_niveau(pts: list[dict]) -> pd.DataFrame:
 
     if df.empty:
         print("  → Fallback OSM...")
-        df = _pn_from_osm()
+        df = _pn_from_osm(pts)
 
     if df.empty or not pts:
         return df
@@ -370,7 +384,7 @@ def fetch_passages_niveau(pts: list[dict]) -> pd.DataFrame:
 
 def get_tunnels() -> pd.DataFrame:
     """Retourne le DataFrame des 12 tunnels vérifiés de la ligne."""
-    df = pd.DataFrame(TUNNELS)
+    df = pd.read_csv(Path(LIGNE_DIR) / "tunnels.csv") if LIGNE_DIR else pd.DataFrame(TUNNELS)
     print(f"  {len(df)} tunnels chargés :")
     for _, t in df.iterrows():
         print(f"    {t['nom']:35s}  L={int(t['longueur_m'])} m  "
@@ -578,6 +592,61 @@ def _query_dem_batch(batch_coords: list[tuple[float, float]]) -> list[float | No
     return [None] * len(batch_coords)
 
 
+def _dem_glo30(lat_min, lat_max, lon_min, lon_max, lat_mean, grid_spacing_m):
+    """Même grille que la version OpenTopoData, valeurs lues (bilinéaire) dans les tuiles GLO-30."""
+    import rasterio
+    from rasterio.transform import from_origin
+    from rasterio.warp import reproject, Resampling
+    dlat = grid_spacing_m / 111_000.0
+    dlon = grid_spacing_m / (111_000.0 * math.cos(math.radians(lat_mean)))
+    n_rows = int((lat_max - lat_min) / dlat) + 1
+    n_cols = int((lon_max - lon_min) / dlon) + 1
+    grid = np.full((n_rows, n_cols), np.nan, dtype="float32")
+    transform = from_origin(lon_min, lat_max, dlon, dlat)
+    for la in range(math.floor(lat_min), math.floor(lat_max) + 1):
+        for lo in range(math.floor(lon_min), math.floor(lon_max) + 1):
+            nom = f"Copernicus_DSM_COG_10_N{la:02d}_00_E{lo:03d}_00_DEM"
+            url = f"https://copernicus-dem-30m.s3.amazonaws.com/{nom}/{nom}.tif"
+            print(f"  tuile {nom}")
+            with rasterio.open(url) as src:
+                tmp = np.full_like(grid, np.nan)
+                reproject(rasterio.band(src, 1), tmp, dst_transform=transform, dst_crs="EPSG:4326",
+                          dst_nodata=np.nan, resampling=Resampling.bilinear)
+            grid = np.where(np.isnan(grid), tmp, grid)
+    n_nan = int(np.isnan(grid).sum())
+    print(f"  Grille GLO-30 : {n_rows} x {n_cols}, {n_nan} NaN, alt [{np.nanmin(grid):.0f}–{np.nanmax(grid):.0f} m]")
+    if n_nan / grid.size > DEM_MAX_NAN_FRACTION:
+        return None
+    TERRAIN_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = TERRAIN_DIR / "eu_dem_courpiere_ambert.tif"  # même nom : lu tel quel par prepare_data.py
+    with rasterio.open(out_path, "w", driver="GTiff", height=n_rows, width=n_cols, count=1,
+                       dtype="float32", crs="EPSG:4326", transform=transform, nodata=np.nan) as dst:
+        dst.write(grid, 1)
+    print(f"  ✓ Raster DEM (GLO-30) : {out_path}")
+    return out_path
+
+
+def fetch_worldcover(pts, rayon_km=RAYON_KM):
+    """Végétation de la 2e ligne : extrait ESA WorldCover 2021 (AWS) sur la zone, dans data/raw/landcover.
+    (La ligne 1 utilise la règle par distance de prepare_data.get_vegetation, propre à Courpière–Ambert.)"""
+    import rasterio
+    from rasterio.windows import from_bounds
+    lat_min, lat_max, lon_min, lon_max, _ = _grid_bbox(pts, rayon_km, 1.0)
+    la0, lo0 = 3 * math.floor(lat_min / 3), 3 * math.floor(lon_min / 3)
+    url = ("https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/"
+           f"ESA_WorldCover_10m_2021_v200_N{la0:02d}E{lo0:03d}_Map.tif")
+    with rasterio.open(url) as src:
+        w = from_bounds(lon_min, lat_min, lon_max, lat_max, src.transform)
+        data = src.read(1, window=w)
+        prof = src.profile | {"height": data.shape[0], "width": data.shape[1],
+                              "transform": src.window_transform(w), "driver": "GTiff"}
+    out = RAW_DIR / "landcover"
+    out.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(out / "worldcover_zone.tif", "w", **prof) as dst:
+        dst.write(data, 1)
+    print(f"  ✓ WorldCover : {data.shape}, classes {dict(zip(*np.unique(data, return_counts=True)))}")
+
+
 def build_local_dem_raster(
     pts: list[dict],
     rayon_km: float = RAYON_KM,
@@ -597,6 +666,8 @@ def build_local_dem_raster(
     qu'il est censé corriger.
     """
     lat_min, lat_max, lon_min, lon_max, lat_mean = _grid_bbox(pts, rayon_km, margin_km)
+    if DEM_SOURCE == "glo30":
+        return _dem_glo30(lat_min, lat_max, lon_min, lon_max, lat_mean, grid_spacing_m)
 
     dlat = grid_spacing_m / 111_000.0
     dlon = grid_spacing_m / (111_000.0 * math.cos(math.radians(lat_mean)))
@@ -697,7 +768,7 @@ def main() -> None:
     print("=" * 70)
 
     print("\n[1/6] Tracé ferroviaire (lecture CSV)...")
-    trace_csv = RAW_DIR / "courpiere_ambert_resampled.csv"
+    trace_csv = Path(LIGNE_DIR) / "trace.csv" if LIGNE_DIR else RAW_DIR / "courpiere_ambert_resampled.csv"
     try:
         pts = load_trace(trace_csv, spacing_m=SPACING_M)
     except (FileNotFoundError, ValueError) as e:
@@ -727,6 +798,10 @@ def main() -> None:
     print(f"\n[6/6] Raster DEM local (zone complète, pour le test LOS)...")
     dem_path = build_local_dem_raster(pts, rayon_km=RAYON_KM, margin_km=DEM_BUFFER_MARGIN_KM,
                                       grid_spacing_m=DEM_GRID_SPACING_M)
+
+    if LIGNE_DIR:
+        print("\n[+] Occupation du sol ESA WorldCover (2e ligne)...")
+        fetch_worldcover(pts)
 
     df_ligne.to_csv(RAW_DIR / "ligne_gps.csv",       index=False)
     df_pn.to_csv(RAW_DIR   / "passages_niveau.csv",  index=False)
