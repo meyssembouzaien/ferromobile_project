@@ -305,6 +305,8 @@ def initialiser_depuis(chemin, modele, modele_cible, device):
     if w.shape[1] < w_neuf.shape[1]:
         poids["tronc.0.weight"] = torch.cat([w, w.new_zeros(w.shape[0], w_neuf.shape[1] - w.shape[1], *w.shape[2:])], 1)
         print(f"Affinage : {w_neuf.shape[1] - w.shape[1]} canaux ajoutés, poids d'entrée à zéro")
+    if "indices_actions" in poids:   # autre ligne : on garde les actions du corridor courant
+        poids["indices_actions"] = modele.indices_actions
     modele.load_state_dict(poids)
     modele_cible.load_state_dict(poids)
     print(f"Affinage : poids de {chemin} (épisode {etat['episode']}), epsilon = {EPSILON_FIN}")
