@@ -113,7 +113,7 @@ class FerroMobileEnv:
                  points_evalues=None, points_stats=None, operateurs_exclus=(),
                  actions_autorisees=None, stop_si_couvert=False, masque_utile=False,
                  r_fin_blancs_initiaux=False, canal_couverture=False, chemin_couverture=None,
-                 retrait_sites=0.0, secteur_protege=None, secteur_retire=None):
+                 retrait_sites=0.0, secteur_protege=None, secteur_retire=None, retrait_groupe=False):
         self.scenario = scenario
         # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
@@ -124,6 +124,8 @@ class FerroMobileEnv:
         # Validation croisée spatiale : secteur jamais retiré à l'entraînement / secteur retiré au test
         self.secteur_protege = secteur_protege
         self.secteur_retire = secteur_retire
+        self.retrait_groupe = retrait_groupe   # panne régionale : tous les sites d'une fenêtre de ligne
+        self._km_site = None
         self._secteurs = None
         self.budget_total = budget
         self.poids = poids or {"w_Q": 1.0, "w_W": 1.0, "w_H": 1.0, "w_O": 1.0, "w_T": 1.0}
@@ -230,7 +232,23 @@ class FerroMobileEnv:
         if self.secteur_retire is not None:
             # test : tous les sites du secteur disparaissent (tous opérateurs)
             df_scenario = df_scenario[secteur_site.reindex(df_scenario.index) != self.secteur_retire]
-        if self.retrait_sites and self.retrait_actif and np.random.rand() < 0.5:
+        if self.retrait_groupe and self.retrait_actif and np.random.rand() < 0.25:
+            # panne régionale : tous les sites (tous opérateurs) dont le point le mieux servi est
+            # dans une fenêtre aléatoire de 2 km à L/4 (position non alignée sur les secteurs)
+            if self._km_site is None:
+                k = df_scenario[df_scenario["ant_id"].notna() & ~df_scenario["in_tunnel"]]
+                m = k.loc[k.assign(cle=cle_site(k)).groupby("cle")["debit_adj_mbps"].idxmax()]
+                self._km_site = dict(zip(cle_site(m), m["distance_km"]))
+                self._L = df_scenario["distance_km"].max()
+            w = np.random.uniform(2.0, self._L / 4)
+            a = np.random.uniform(0.0, self._L - w)
+            km = cle_site(df_scenario).map(self._km_site)
+            hors = (km >= a) & (km <= a + w)
+            if self.secteur_protege is not None:
+                hors &= secteur_site.reindex(df_scenario.index) != self.secteur_protege
+            self.n_sites_retires = int(cle_site(df_scenario[hors]).nunique())
+            df_scenario = df_scenario[~hors]
+        elif self.retrait_sites and self.retrait_actif and np.random.rand() < 0.5:
             # unité retirée : (site, opérateur), 63 sur la ligne ; retirer un opérateur en enlève environ 25 %
             cle = (df_scenario["ant_lat"].round(5).astype(str) + "_" + df_scenario["ant_lon"].round(5).astype(str)
                    + "_" + df_scenario["operateur"].astype(str))

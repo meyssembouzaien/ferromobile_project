@@ -85,6 +85,8 @@ OPTIONS_ENV = {k: True for k, v in [("stop_si_couvert", STOP_SI_COUVERT), ("masq
                                     ("canal_couverture", CANAL_COUVERTURE)] if v}
 if RETRAIT_SITES:
     OPTIONS_ENV["retrait_sites"] = RETRAIT_SITES
+if os.environ.get("FM_CLUSTER_DROP", "0") == "1":   # pannes régionales (fenêtre de ligne)
+    OPTIONS_ENV["retrait_groupe"] = True
 CV_SECTEUR = os.environ.get("FM_CV_SECTOR", "")   # CV spatiale : secteur (0-3) jamais retiré à l'entraînement
 if CV_SECTEUR:
     OPTIONS_ENV["secteur_protege"] = int(CV_SECTEUR)
