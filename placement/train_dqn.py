@@ -91,6 +91,8 @@ CV_SECTEUR = os.environ.get("FM_CV_SECTOR", "")   # CV spatiale : secteur (0-3) 
 if CV_SECTEUR:
     OPTIONS_ENV["secteur_protege"] = int(CV_SECTEUR)
 INIT_DEPUIS = os.environ.get("FM_INIT_FROM", "")
+# Entraînement conjoint sur deux lignes : poids partagés repris du dernier bloc de l'autre ligne
+POIDS_PARTAGES = os.environ.get("FM_SHARED_FROM", "")
 POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_TRANS, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
 
 _SUFFIXE = ((f"_wT{POIDS_TRANS:g}" if POIDS_TRANS != 1.0 else "")
@@ -311,6 +313,15 @@ def initialiser_depuis(chemin, modele, modele_cible, device):
     modele_cible.load_state_dict(poids)
     print(f"Affinage : poids de {chemin} (épisode {etat['episode']}), epsilon = {EPSILON_FIN}")
     return 0, EPSILON_FIN, N_STEPS_EXPLORATION
+
+
+def charger_poids_partages(chemin, modele, modele_cible, device):
+    """Poids du réseau seulement (optimiseur, buffer et epsilon de ce run gardés)."""
+    poids = dict(torch.load(chemin, map_location=device, weights_only=False)["modele"])
+    poids["indices_actions"] = modele.indices_actions   # actions du corridor courant
+    modele.load_state_dict(poids)
+    modele_cible.load_state_dict(poids)
+    print(f"Poids partagés repris de {chemin}")
 
 
 def preparer_log(chemin, colonnes, dernier_episode):
@@ -543,6 +554,8 @@ def main():
                                                               len(env.actions), buffer)
     if episode_depart == 0 and INIT_DEPUIS:
         episode_depart, epsilon, total_steps = initialiser_depuis(INIT_DEPUIS, modele, modele_cible, device)
+    if POIDS_PARTAGES and os.path.exists(POIDS_PARTAGES):
+        charger_poids_partages(POIDS_PARTAGES, modele, modele_cible, device)
     if episode_depart >= N_EPISODES_TRAIN:
         print(f"Run déjà terminé ({episode_depart} épisodes). Augmenter FM_EPISODES pour continuer.")
         return
