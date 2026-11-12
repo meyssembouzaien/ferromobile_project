@@ -113,7 +113,8 @@ class FerroMobileEnv:
                  points_evalues=None, points_stats=None, operateurs_exclus=(),
                  actions_autorisees=None, stop_si_couvert=False, masque_utile=False,
                  r_fin_blancs_initiaux=False, canal_couverture=False, chemin_couverture=None,
-                 retrait_sites=0.0, secteur_protege=None, secteur_retire=None, retrait_groupe=False):
+                 retrait_sites=0.0, secteur_protege=None, secteur_retire=None, retrait_groupe=False,
+                 groupe_max=0.25, groupe_proba=0.25):
         self.scenario = scenario
         # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
@@ -125,6 +126,8 @@ class FerroMobileEnv:
         self.secteur_protege = secteur_protege
         self.secteur_retire = secteur_retire
         self.retrait_groupe = retrait_groupe   # panne régionale : tous les sites d'une fenêtre de ligne
+        self.groupe_max = groupe_max           # taille max de la fenêtre (part de la ligne)
+        self.groupe_proba = groupe_proba       # part des épisodes avec une panne régionale
         self._km_site = None
         self._secteurs = None
         self.budget_total = budget
@@ -232,15 +235,15 @@ class FerroMobileEnv:
         if self.secteur_retire is not None:
             # test : tous les sites du secteur disparaissent (tous opérateurs)
             df_scenario = df_scenario[secteur_site.reindex(df_scenario.index) != self.secteur_retire]
-        if self.retrait_groupe and self.retrait_actif and np.random.rand() < 0.25:
+        if self.retrait_groupe and self.retrait_actif and np.random.rand() < self.groupe_proba:
             # panne régionale : tous les sites (tous opérateurs) dont le point le mieux servi est
-            # dans une fenêtre aléatoire de 2 km à L/4 (position non alignée sur les secteurs)
+            # dans une fenêtre aléatoire de 2 km à groupe_max * L (position non alignée sur les secteurs)
             if self._km_site is None:
                 k = df_scenario[df_scenario["ant_id"].notna() & ~df_scenario["in_tunnel"]]
                 m = k.loc[k.assign(cle=cle_site(k)).groupby("cle")["debit_adj_mbps"].idxmax()]
                 self._km_site = dict(zip(cle_site(m), m["distance_km"]))
                 self._L = df_scenario["distance_km"].max()
-            w = np.random.uniform(2.0, self._L / 4)
+            w = np.random.uniform(2.0, self._L * self.groupe_max)
             a = np.random.uniform(0.0, self._L - w)
             km = cle_site(df_scenario).map(self._km_site)
             hors = (km >= a) & (km <= a + w)

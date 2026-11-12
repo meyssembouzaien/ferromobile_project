@@ -87,6 +87,8 @@ if RETRAIT_SITES:
     OPTIONS_ENV["retrait_sites"] = RETRAIT_SITES
 if os.environ.get("FM_CLUSTER_DROP", "0") == "1":   # pannes régionales (fenêtre de ligne)
     OPTIONS_ENV["retrait_groupe"] = True
+    OPTIONS_ENV["groupe_max"] = float(os.environ.get("FM_CLUSTER_MAX", 0.25))     # fenêtre max (part de L)
+    OPTIONS_ENV["groupe_proba"] = float(os.environ.get("FM_CLUSTER_PROB", 0.25))  # part des épisodes
 CV_SECTEUR = os.environ.get("FM_CV_SECTOR", "")   # CV spatiale : secteur (0-3) jamais retiré à l'entraînement
 if CV_SECTEUR:
     OPTIONS_ENV["secteur_protege"] = int(CV_SECTEUR)
