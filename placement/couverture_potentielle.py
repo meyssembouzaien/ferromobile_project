@@ -9,7 +9,8 @@ mât selon la génération, véhicule à 4 m. Le seuil de débit n'est pas test�
 Sortie (npz) : cellules (indices ix * ny + iy), points (point_id des points blancs initiaux),
 dist_km (cellules x points), los_<génération> (cellules x points, booléen).
 
-Lancer : python couverture_potentielle.py   (écrit data/processed/couverture_potentielle_S1.npz)
+Lancer : python couverture_potentielle.py        (points blancs initiaux, couverture_potentielle_S1.npz)
+        python couverture_potentielle.py tous   (tous les points hors tunnel, couverture_potentielle_S1_tous.npz)
 """
 
 import os
@@ -24,6 +25,8 @@ from prepare_data import (MAT_HEIGHT_M, RECEIVER_HEIGHT_M, LOS_SAMPLE_PER_KM, LO
 
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHEMIN_DEFAUT = os.path.join(RACINE, "data", "processed", "couverture_potentielle_S1.npz")
+# Tous les points hors tunnel (masque LOS : les points blancs changent quand des sites sont retirés)
+CHEMIN_TOUS = os.path.join(RACINE, "data", "processed", "couverture_potentielle_S1_tous.npz")
 
 
 class DEM:
@@ -78,8 +81,8 @@ def los_profils(dem, lat_a, lon_a, sol_a, lat_p, lon_p, dist_km, mats):
     return resultat
 
 
-def calculer(env, dem=None):
-    """Portée + LOS de chaque cellule du corridor vers chaque point blanc initial de env."""
+def calculer(env, dem=None, tous_points=False):
+    """Portée + LOS de chaque cellule du corridor vers chaque point blanc initial de env (ou tous les points)."""
     from environment_rl import BANDES_PAR_GENERATION
     dem = dem or DEM()
     generations = sorted(BANDES_PAR_GENERATION)
@@ -92,7 +95,7 @@ def calculer(env, dem=None):
     sol_c = _remplir_nan(dem.altitudes(lat_c, lon_c)[None, :])[0]
 
     pts = env.df_points.set_index("point_id")
-    points = list(env._points_blancs)
+    points = sorted(env.points_hors_tunnel) if tous_points else list(env._points_blancs)
     dist = np.zeros((len(cellules), len(points)), dtype=np.float32)
     los = np.zeros((len(generations), len(cellules), len(points)), dtype=bool)
     debut = time.time()
@@ -108,13 +111,13 @@ def calculer(env, dem=None):
             **{f"los_{g}": los[k] for k, g in enumerate(generations)}}
 
 
-def charger_ou_calculer(env, chemin=CHEMIN_DEFAUT):
+def charger_ou_calculer(env, chemin=CHEMIN_DEFAUT, tous_points=False):
     if os.path.exists(chemin):
         d = np.load(chemin, allow_pickle=False)
         return {k: d[k] for k in d.files}
     print(f"Couverture potentielle absente ({chemin}) : calcul (une seule fois)")
     debut = time.time()
-    resultat = calculer(env)
+    resultat = calculer(env, tous_points=tous_points)
     os.makedirs(os.path.dirname(chemin), exist_ok=True)
     np.savez_compressed(chemin, **resultat)
     print(f"Couverture potentielle : {len(resultat['cellules'])} cellules x {len(resultat['points'])} points blancs, "
@@ -126,4 +129,7 @@ if __name__ == "__main__":
     from environment_rl import FerroMobileEnv
     env = FerroMobileEnv(scenario="S1", budget=10e6, t_max=150, sauvegarder_deploiements_rl=False)
     env.reset()
-    charger_ou_calculer(env)
+    if "tous" in sys.argv[1:]:
+        charger_ou_calculer(env, CHEMIN_TOUS, tous_points=True)
+    else:
+        charger_ou_calculer(env)

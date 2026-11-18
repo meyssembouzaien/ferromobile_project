@@ -114,7 +114,7 @@ class FerroMobileEnv:
                  actions_autorisees=None, stop_si_couvert=False, masque_utile=False,
                  r_fin_blancs_initiaux=False, canal_couverture=False, chemin_couverture=None,
                  retrait_sites=0.0, secteur_protege=None, secteur_retire=None, retrait_groupe=False,
-                 groupe_max=0.25, groupe_proba=0.25):
+                 groupe_max=0.25, groupe_proba=0.25, masque_los=False):
         self.scenario = scenario
         # B_train pour b_t (éq. 3.29) ; par défaut, le budget de l'épisode
         self.budget_reference = budget_reference if budget_reference is not None else budget
@@ -140,6 +140,8 @@ class FerroMobileEnv:
         self.t_max = t_max
         self.stop_si_couvert = stop_si_couvert   # True : STOP permis seulement à 0 zone blanche
         self.masque_utile = masque_utile         # True : seules les cellules à portée d'un point blanc
+        self.masque_los = masque_los             # True : seules les actions qui couvriraient un point blanc (portée + LOS)
+        self._los = None
         self.r_fin_blancs_initiaux = r_fin_blancs_initiaux   # True : r_fin normalisé par les blancs initiaux
         self.canal_couverture = canal_couverture  # True : 3 canaux de couverture potentielle (un par génération)
         self.chemin_couverture = chemin_couverture
@@ -196,7 +198,7 @@ class FerroMobileEnv:
                                       dtype=np.int64)
 
         # Masque utile : centre de chaque cellule, portée de chaque action, position des points
-        if masque_utile:
+        if masque_utile or masque_los:
             self._cellules_uniques, self._cellule_vers_unique = np.unique(self._cellule_action, return_inverse=True)
             centres = [self.grille.cellule_vers_gps(c // self.grille.ny, c % self.grille.ny)
                        for c in self._cellules_uniques]
@@ -318,6 +320,8 @@ class FerroMobileEnv:
         self._dernier_n_white = n_white
         self._dernier_n_eval = n_eval
         self.n_white_initial = n_white
+        if self.masque_los and self._los is None:
+            self._preparer_masque_los()
         self._maj_actions_utiles()
         if self.canal_couverture and self._couverture is None:
             self._preparer_couverture()
@@ -395,7 +399,7 @@ class FerroMobileEnv:
             return self._stop_permis(self._actions_faisables()[1:].any())
         if self.actions_autorisees is not None and not self.actions_autorisees[self.action_index[action]]:
             return False
-        if self.masque_utile and not self._utile[self.action_index[action] - 1]:
+        if (self.masque_utile or self.masque_los) and not self._utile[self.action_index[action] - 1]:
             return False
         ix, iy, g, f = action
         if (ix, iy, g, f) in self.deploiements_reels or (ix, iy, g, f) in self.infrastructure_deployee:
@@ -411,14 +415,18 @@ class FerroMobileEnv:
         masque[1:] = (~self._deploye[1:]) & (cout <= self.budget_restant)
         if self.actions_autorisees is not None:
             masque &= self.actions_autorisees
-        if self.masque_utile:
+        if self.masque_utile or self.masque_los:
             masque[1:] &= self._utile
         masque[0] = self._stop_permis(masque[1:].any())
         return masque
 
     def _maj_actions_utiles(self):
         """Masque utile : action à portée nominale d'au moins un point blanc restant.
-        La LOS n'est pas testée, donc le masque ne retire jamais une action qui pourrait couvrir."""
+        La LOS n'est pas testée, donc le masque ne retire jamais une action qui pourrait couvrir.
+        Masque LOS : l'action doit couvrir au moins un point blanc restant (portée de sa bande + LOS)."""
+        if self.masque_los:
+            self._maj_masque_los()
+            return
         if not self.masque_utile:
             return
         if not self._points_blancs:
@@ -431,6 +439,34 @@ class FerroMobileEnv:
         for la, lo in zip(lat, lon):
             np.minimum(d_min, haversine_km_vec(la, lo, self._lat_cellules, self._lon_cellules), out=d_min)
         self._utile = d_min[self._cellule_vers_unique] <= self._portee_action
+
+    def _preparer_masque_los(self):
+        """Lit (ou calcule une fois) portée + LOS de chaque cellule vers tous les points hors tunnel."""
+        import couverture_potentielle as cp
+        d = cp.charger_ou_calculer(self, self.chemin_couverture or cp.CHEMIN_TOUS, tous_points=True)
+        cellules = d["cellules"]
+        ligne = np.searchsorted(cellules, self._cellule_action)
+        assert (cellules[ligne] == self._cellule_action).all(), "cellules du fichier de couverture différentes"
+        gen = np.array([a[2] for a in self.actions[1:]])
+        # Actions groupées par (génération, portée de la bande)
+        groupes = {}
+        for i, cle in enumerate(zip(gen, self._portee_action)):
+            groupes.setdefault(cle, []).append(i)
+        self._los = {"ligne": ligne, "dist": d["dist_km"],
+                     "index_point": {p: j for j, p in enumerate(d["points"].tolist())},
+                     "los": {g: d[f"los_{g}"] for g in sorted(BANDES_PAR_GENERATION)},
+                     "groupes": {k: np.array(v) for k, v in groupes.items()}}
+
+    def _maj_masque_los(self):
+        c = self._los
+        cols = [c["index_point"][p] for p in self._points_blancs if p in c["index_point"]]
+        self._utile = np.zeros(len(self.actions) - 1, dtype=bool)
+        if not cols:
+            return
+        dist = c["dist"][:, cols]
+        for (g, portee), actions in c["groupes"].items():
+            cellule_ok = ((dist <= portee) & c["los"][g][:, cols]).any(axis=1)
+            self._utile[actions] = cellule_ok[c["ligne"][actions]]
 
     def _preparer_couverture(self):
         """Lit (ou calcule une fois) portée + LOS cellule -> point blanc, par génération."""

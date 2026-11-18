@@ -89,6 +89,8 @@ if os.environ.get("FM_CLUSTER_DROP", "0") == "1":   # pannes régionales (fenêt
     OPTIONS_ENV["retrait_groupe"] = True
     OPTIONS_ENV["groupe_max"] = float(os.environ.get("FM_CLUSTER_MAX", 0.25))     # fenêtre max (part de L)
     OPTIONS_ENV["groupe_proba"] = float(os.environ.get("FM_CLUSTER_PROB", 0.25))  # part des épisodes
+if os.environ.get("FM_LOS_MASK", "0") == "1":   # seules les actions qui couvriraient un point blanc (portée + LOS)
+    OPTIONS_ENV["masque_los"] = True
 CV_SECTEUR = os.environ.get("FM_CV_SECTOR", "")   # CV spatiale : secteur (0-3) jamais retiré à l'entraînement
 if CV_SECTEUR:
     OPTIONS_ENV["secteur_protege"] = int(CV_SECTEUR)

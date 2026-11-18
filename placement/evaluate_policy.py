@@ -94,7 +94,7 @@ def main():
           f"poids d'entraînement {etat_ckpt.get('poids')})")
 
     # Options d'environnement du run (masque, STOP, r_fin), lues dans le checkpoint
-    options = {k: True for k in ("stop_si_couvert", "masque_utile", "r_fin_blancs_initiaux", "canal_couverture")
+    options = {k: True for k in ("stop_si_couvert", "masque_utile", "r_fin_blancs_initiaux", "canal_couverture", "masque_los")
                if (etat_ckpt.get("config") or {}).get(k)}
 
     def env_(**k):
