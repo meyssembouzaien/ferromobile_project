@@ -4,6 +4,7 @@ train_dqn.py : entraînement du Dueling DQN (ou Vanilla DQN) sur FerroMobileEnv.
 Hyperparamètres : tableau 4.1. Réglages par variables d'environnement :
     FM_EPISODES   nombre d'épisodes (300)
     FM_W_W        poids des zones blanches w_W (1)
+    FM_W_H        poids des handovers w_H (défaut : FM_W_TRANS)
     FM_ARCH       dueling ou vanilla
     FM_EXPLORATION  softmax (Boltzmann) ou uniforme
     FM_SEED       graine (0)
@@ -97,7 +98,8 @@ if CV_SECTEUR:
 INIT_DEPUIS = os.environ.get("FM_INIT_FROM", "")
 # Entraînement conjoint sur deux lignes : poids partagés repris du dernier bloc de l'autre ligne
 POIDS_PARTAGES = os.environ.get("FM_SHARED_FROM", "")
-POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_TRANS, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
+POIDS_H = float(os.environ.get("FM_W_H", POIDS_TRANS))   # poids des handovers seuls (par défaut = FM_W_TRANS)
+POIDS = {"w_Q": 1.0, "w_W": POIDS_W, "w_H": POIDS_H, "w_O": POIDS_TRANS, "w_T": POIDS_TRANS}
 
 _SUFFIXE = ((f"_wT{POIDS_TRANS:g}" if POIDS_TRANS != 1.0 else "")
             + (f"_cost{PENALITE_COUT:g}" if PENALITE_COUT else "")
