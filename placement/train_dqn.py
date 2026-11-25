@@ -5,6 +5,7 @@ Hyperparamètres : tableau 4.1. Réglages par variables d'environnement :
     FM_EPISODES   nombre d'épisodes (300)
     FM_W_W        poids des zones blanches w_W (1)
     FM_W_H        poids des handovers w_H (défaut : FM_W_TRANS)
+    FM_Q_CRIT     seuil Q_critique de r_fin à l'entraînement (0,5)
     FM_ARCH       dueling ou vanilla
     FM_EXPLORATION  softmax (Boltzmann) ou uniforme
     FM_SEED       graine (0)
@@ -92,6 +93,8 @@ if os.environ.get("FM_CLUSTER_DROP", "0") == "1":   # pannes régionales (fenêt
     OPTIONS_ENV["groupe_proba"] = float(os.environ.get("FM_CLUSTER_PROB", 0.25))  # part des épisodes
 if os.environ.get("FM_LOS_MASK", "0") == "1":   # seules les actions qui couvriraient un point blanc (portée + LOS)
     OPTIONS_ENV["masque_los"] = True
+if os.environ.get("FM_Q_CRIT"):   # seuil de QoS minimale de r_fin (0,5 par défaut) ; l'évaluation garde 0,5
+    OPTIONS_ENV["Q_critique"] = float(os.environ["FM_Q_CRIT"])
 CV_SECTEUR = os.environ.get("FM_CV_SECTOR", "")   # CV spatiale : secteur (0-3) jamais retiré à l'entraînement
 if CV_SECTEUR:
     OPTIONS_ENV["secteur_protege"] = int(CV_SECTEUR)
