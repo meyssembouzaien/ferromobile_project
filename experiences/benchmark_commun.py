@@ -14,7 +14,7 @@ Règles communes :
     déployée, portée + LOS vers un point blanc restant) ;
   - même budget, même limite de temps TEMPS_MAX_S par méthode et par configuration ;
   - chaque plan est rejoué dans le même environnement et mesuré par les mêmes critères ;
-  - tout tourne dans le même processus, sur la même machine ; le temps de calcul de chaque méthode est mesuré
+  - tout tourne dans le même processus, sur la même machine, cache des simulations vidé avant chaque méthode ; le temps de calcul de chaque méthode est mesuré
     (le temps d'entraînement de l'agent est compté à part, dans son train_log.csv).
 
 Lancer (depuis experiences/, avec le DEM et crc-covlib) :
@@ -41,7 +41,7 @@ os.environ.setdefault("CRC_COVLIB_PATH", os.path.join(RACINE, "crc-covlib", "pyt
 
 import reglage_commun as R                                       # noqa: E402
 from cost_model import C_SITE_EUR, get_radio_cost, get_total_cost   # noqa: E402
-from environment_rl import FerroMobileEnv, STOP                  # noqa: E402
+from environment_rl import FerroMobileEnv, STOP, _CACHE_SIMULATION   # noqa: E402
 
 
 def nouvel_env(config):
@@ -321,6 +321,7 @@ def main():
         for nom, graine, f in taches:
             if (config, nom, graine) in faits:
                 continue
+            _CACHE_SIMULATION.clear()   # chaque méthode part sans simulations en cache (temps comparables)
             debut = time.time()
             plan, extra = f(debut)
             duree = time.time() - debut
