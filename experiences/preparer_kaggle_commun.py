@@ -4,7 +4,7 @@ N'envoie rien : chaque fichier est poussé plus tard, à la main.
 
   entraînement  graines 0, 1, 2 sur la ligne entière ; plis de CV spatiale 0-3 (graine 0) ; GPU
   benchmark     toutes les méthodes de référence sur toutes les configurations ; CPU
-Les deux lisent reglage_commun.py et utilisent les données de la ligne 1 avec WorldCover.
+Les deux lisent reglage_commun.py et les données du dépôt (ligne 1, végétation WorldCover, data/processed).
 
 Lancer : python preparer_kaggle_commun.py <modele.json> <dossier_sortie>
   <modele.json> : un notebook d'entraînement existant (cellules d'installation reprises telles quelles)
@@ -16,20 +16,12 @@ import sys
 import reglage_commun as R
 
 BRANCHE = "claude/project-thread-7krjjo"
-DONNEES = "meyssembouzaien/ferromobile-ligne1-worldcover"   # sortie du notebook WorldCover (données ligne 1)
 
 
 def cellule(code):
     return {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [], "source": code}
 
 
-COPIE_DONNEES = '''# Ligne 1 avec la végétation WorldCover (sortie du notebook ferromobile-ligne1-worldcover)
-import glob, os, shutil
-src = [d for d in glob.glob("/kaggle/input/**/ligne1_worldcover/processed", recursive=True)]
-assert src, "Add Input > Your Work > ferromobile-ligne1-worldcover"
-shutil.copytree(src[0], "/kaggle/working/ferromobile_project/data/processed", dirs_exist_ok=True)
-print("Données :", src[0], sorted(os.listdir(src[0])))
-'''
 
 
 def notebook(modele, cellules):
@@ -58,8 +50,8 @@ def main():
         code = ("# 1. Recette commune (experiences/reglage_commun.py), depuis zéro\nimport os\nRUN = "
                 + json.dumps(v, indent=1) + f'\nBRANCHE = "{BRANCHE}"\nos.environ.update(RUN)\nprint(RUN)\n')
         slug = "ferromobile-" + v["FM_RUN"].replace("_", "-")
-        d = payload(modele, slug, [intro, cellule(code), installation, dem, cellule(COPIE_DONNEES), tests, secrets,
-                                   reprise, entrainement, journaux], True, [DONNEES])   # reprise : ajouter sa propre sortie
+        d = payload(modele, slug, [intro, cellule(code), installation, dem, tests, secrets,
+                                   reprise, entrainement, journaux], True, [])   # reprise : ajouter sa propre sortie
         json.dump(d, open(os.path.join(out, f"kaggle_push_{v['FM_RUN']}.json"), "w"))
 
     # Benchmark en 3 notebooks CPU (chacun tient dans une session de 12 h)
@@ -72,7 +64,7 @@ def main():
         code = f'import os\nBRANCHE = "{BRANCHE}"\nos.environ["PYTHONUNBUFFERED"] = "1"\n'
         d = payload(modele, f"ferromobile-benchmark-{nom}",
                     [cellule(f"# FerroMobile : benchmark commun, {nom}"), cellule(code), installation, dem,
-                     cellule(COPIE_DONNEES), tests, cellule(bench)], False, [DONNEES])
+                     tests, cellule(bench)], False, [])
         json.dump(d, open(os.path.join(out, f"kaggle_push_benchmark_{nom}.json"), "w"))
     print(sorted(os.listdir(out)))
 
