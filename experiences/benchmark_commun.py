@@ -82,6 +82,7 @@ def rejouer(config, plan):
     nouveaux = len({tuple(a[:2]) for a in plan[:n]} - SITES_INITIAUX[config])
     return {"n_white_avant": n_avant, **mesurer(env), "cout_eur": info.get("cout_total", 0.0),
             "deploiements": n, "nouveaux_sites": nouveaux,
+            "U_trajet": env.U_reference(),   # utilité du trajet seule (sans le terme de coût de r_fin)
             "return_ref": env.U_reference() - U0 + info.get("r_fin", 0.0)}
 
 
@@ -334,7 +335,7 @@ def main():
             pd.DataFrame(lignes).to_csv(fichier, index=False)   # reprise possible après une coupure
 
     df = pd.DataFrame(lignes)
-    crit = ["n_white", "cout_eur", "q_mean", "q_min", "N_H", "N_O", "N_T", "N_cut", "return_ref", "temps_calcul_s"]
+    crit = ["n_white", "cout_eur", "q_mean", "q_min", "N_H", "N_O", "N_T", "N_cut", "U_trajet", "return_ref", "temps_calcul_s"]
     resume = df.groupby(["ligne", "configuration", "methode"])[crit].agg(["mean", "std", "count"])
     resume.to_csv(os.path.join(a.out, "benchmark_resume.csv"))
     print(resume.to_string())
