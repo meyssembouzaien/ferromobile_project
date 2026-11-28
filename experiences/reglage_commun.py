@@ -36,7 +36,8 @@ ENTRAINEMENT = {
     "FM_W_W": "5",
     "FM_LR": "5e-5",
     "FM_MAJ_CIBLE": "1000",
-    "FM_COST_STEP": "0.2",      # coût de chaque action dans la récompense de l'étape
+    "FM_COST_STEP": "2.0",      # coût de chaque action dans la récompense de l'étape (0,2 : un site ne coûtait que 0,003)
+    "FM_STOP_COVERED": "1",     # STOP interdit tant qu'il reste un point blanc couvrable : couverture = contrainte
     "FM_LOS_MASK": "1",
     "FM_SITE_DROP": "0.3",      # réseaux existants variés
     "FM_CLUSTER_DROP": "1",     # pannes régionales
@@ -50,7 +51,7 @@ EPISODE_FINAL = int(ENTRAINEMENT["FM_EPISODES"])
 def variables_entrainement(graine, secteur_protege=None):
     """Variables d'environnement d'un run : même recette, seule la graine (et le pli de CV) change."""
     v = dict(ENTRAINEMENT, FM_SEED=str(graine))
-    nom = f"commun_seed{graine}"
+    nom = f"commun_v2_seed{graine}"
     if secteur_protege is not None:
         v["FM_CV_SECTOR"] = str(secteur_protege)
         nom += f"_cv{secteur_protege}"
