@@ -273,7 +273,9 @@ def agent(config, chemin):
     poids["indices_actions"] = modele.indices_actions
     modele.load_state_dict(poids)
     modele.eval()
-    env = nouvel_env(config)
+    # règle d'arrêt de l'agent (comme celle de chaque méthode) : celle de son entraînement
+    env = FerroMobileEnv(**R.options_env(**R.CONFIGURATIONS[config], stop_si_couvert=bool(cfg.get("stop_si_couvert"))))
+    env.reset()
     _, trace = T.episode_glouton(env, modele, device)
     import ast
     plan = [ast.literal_eval(t["action"]) for t in trace if t["action"] != STOP]
