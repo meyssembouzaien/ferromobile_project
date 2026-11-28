@@ -32,7 +32,7 @@ CONFIGURATIONS.update({f"sans_{o.split()[0].lower()}": {"operateurs_exclus": [o]
 ENTRAINEMENT = {
     "FM_ARCH": "dueling",
     "FM_EXPLORATION": "softmax",
-    "FM_EPISODES": "600",       # checkpoint final fixé à l'avance : épisode 600
+    "FM_EPISODES": "1000",      # checkpoint final fixé à l'avance : épisode 1000
     "FM_W_W": "5",
     "FM_LR": "5e-5",
     "FM_MAJ_CIBLE": "1000",
